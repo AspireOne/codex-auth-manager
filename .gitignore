@@ -1,4 +1,7 @@
 /dist/
+.vhs-demo-home/
+.vhs-go/
+.vhs-go-build/
 *.exe
 *.test
 *.out
