@@ -1,0 +1,112 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
+)
+
+func (m appModel) View() tea.View {
+	if m.quitting {
+		return tea.NewView("")
+	}
+
+	header := m.renderHeader()
+	list := m.renderList()
+	footer := m.renderFooter()
+	status := m.renderStatus()
+
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", list, "", footer, "", status)
+	return tea.NewView(baseStyle.Render(content))
+}
+
+func (m appModel) renderHeader() string {
+	current := "none"
+	if m.authActive {
+		if m.currentProfile != "" {
+			current = m.currentProfile
+		} else {
+			current = "custom/unsaved"
+		}
+	}
+
+	authState := "logged out"
+	if m.authActive {
+		authState = "active"
+	}
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		headerTitle.Render("Codex Auth Manager"),
+		"",
+		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
+		fmt.Sprintf("Auth status:     %s", currentTag.Render(authState)),
+		fmt.Sprintf("Saved profiles:  %s", headerValue.Render(fmt.Sprintf("%d", len(m.profiles)))),
+		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileDir)),
+	)
+
+	return panelStyle.Render(body)
+}
+
+func (m appModel) renderList() string {
+	if len(m.profiles) == 0 {
+		return emptyStyle.Render("No saved profiles.")
+	}
+
+	lines := make([]string, 0, len(m.profiles))
+	for i, p := range m.profiles {
+		prefix := "  "
+		style := itemStyle
+
+		if i == m.cursor {
+			prefix = headerTitle.Render("›") + " "
+			style = selectedItemStyle
+		}
+
+		label := p
+		if p == m.currentProfile {
+			label += currentTag.Render("  • current")
+		}
+
+		lines = append(lines, style.Render(prefix+label))
+	}
+
+	return panelStyle.Render(strings.Join(lines, "\n"))
+}
+
+func (m appModel) renderFooter() string {
+	switch m.mode {
+	case modeInput:
+		return footerStyle.Render(fmt.Sprintf("%s %s", m.inputPrompt, m.inputValue+"█"))
+	case modeConfirm:
+		return footerStyle.Render(m.confirmPrompt)
+	default:
+		profileCommands := []string{
+			formatKeyHint("↑/↓", "move"),
+			formatKeyHint("enter", "activate"),
+			formatKeyHint("r", "rename"),
+			formatKeyHint("d", "delete"),
+		}
+		globalCommands := []string{
+			formatKeyHint("s", "save"),
+			formatKeyHint("l", "logout"),
+			formatKeyHint("ctrl+r", "refresh"),
+			formatKeyHint("q", "quit"),
+		}
+
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			footerStyle.Render("UI: "+strings.Join(profileCommands, " • ")),
+			footerStyle.Render("Global: "+strings.Join(globalCommands, " • ")),
+		)
+	}
+}
+
+func (m appModel) renderStatus() string {
+	if m.errText != "" {
+		return errorStyle.Render("Error: " + m.errText)
+	}
+	return statusStyle.Render(m.status)
+}
