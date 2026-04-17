@@ -752,6 +752,9 @@ func saveCurrentAuth(authFile, profileDir, name string) error {
 	if !fileExists(authFile) {
 		return errors.New("no auth.json found — nothing to save")
 	}
+	if _, err := readAuthIdentity(authFile); err != nil {
+		return fmt.Errorf("current auth.json is invalid: %w", err)
+	}
 
 	dst := filepath.Join(profileDir, name)
 	if fileExists(dst) {
