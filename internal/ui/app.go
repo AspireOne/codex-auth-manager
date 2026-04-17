@@ -1,6 +1,8 @@
-package main
+package ui
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
@@ -48,16 +50,29 @@ type appModel struct {
 	quitting bool
 }
 
+func Run() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		return fmt.Errorf("failed to initialize: %w", err)
+	}
+
+	if _, err := tea.NewProgram(m).Run(); err != nil {
+		return fmt.Errorf("application error: %w", err)
+	}
+	return nil
+}
+
 func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
 	return appModel{
 		profileManager: profilemgr.NewManager(codexDir),
 		status:         "Ready.",
 	}
-}
-
-func newProgram(m appModel) *tea.Program {
-	return tea.NewProgram(m)
 }
 
 func (m appModel) Init() tea.Cmd {

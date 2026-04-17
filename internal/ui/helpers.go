@@ -1,4 +1,4 @@
-package main
+package ui
 
 func isPrintableRune(r rune) bool {
 	return r >= 32 && r != 127

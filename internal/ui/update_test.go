@@ -1,7 +1,6 @@
-package main
+package ui
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,9 +47,6 @@ func TestHandleActionErrorReloadsStateForErrStateChanged(t *testing.T) {
 	}
 	if len(got.profiles) != 1 || got.profiles[0] != "saved" {
 		t.Fatalf("profiles = %#v, want [\"saved\"]", got.profiles)
-	}
-	if !errors.Is(fmt.Errorf("%w", profilemgr.ErrStateChanged), profilemgr.ErrStateChanged) {
-		t.Fatal("errors.Is sanity check failed")
 	}
 	if got.errText == "" {
 		t.Fatal("errText is empty, want propagated error")
