@@ -9,7 +9,7 @@ It keeps saved profiles next to your local Codex config and lets you quickly:
 - rename or delete saved profiles
 - log out by removing the active `auth.json`
 
-This is useful if you regularly work with multiple Codex accounts and want a faster way to swap between them without manually copying auth files around.
+This is useful if you regularly work with multiple Codex accounts and want a faster way to swap between them without logging out/in constantly or manually copying auth files around.
 
 ## Build
 
@@ -24,14 +24,3 @@ This produces a Linux `amd64` binary named `codex-manage`.
 ```sh
 ./codex-manage
 ```
-
-## Controls
-
-- `↑/↓` move through profiles
-- `Enter` activate the selected profile
-- `s` save the current auth as a profile
-- `r` rename the selected profile
-- `d` delete the selected profile
-- `l` log out
-- `Ctrl+R` refresh
-- `q` quit
