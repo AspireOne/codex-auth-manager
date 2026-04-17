@@ -20,10 +20,10 @@ if command -v ffmpeg >/dev/null 2>&1; then
   trap 'rm -f "$palette"; cleanup' EXIT
 
   ffmpeg -y -i docs/assets/demo.mp4 \
-    -vf "fps=15,scale=1440:-1:flags=lanczos,palettegen=stats_mode=full" \
+    -vf "fps=20,scale=1440:-1:flags=lanczos,palettegen=stats_mode=full" \
     "$palette"
   ffmpeg -y -i docs/assets/demo.mp4 -i "$palette" \
-    -lavfi "fps=15,scale=1440:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle" \
+    -lavfi "fps=20,scale=1440:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle" \
     docs/assets/demo.gif
 else
   printf '%s\n' "warning: ffmpeg not found; docs/assets/demo.gif was not regenerated" >&2
