@@ -13,6 +13,16 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 
 This is useful if you regularly work with multiple Codex accounts and want a faster way to swap between them without logging out/in constantly or manually copying auth files around.
 
+## Install
+
+With Homebrew:
+
+```sh
+brew install AspireOne/tap/codex-manage
+```
+
+Or download the archive for your platform from the [latest GitHub release](https://github.com/AspireOne/codex-auth-manager/releases/latest), extract it, and put the `codex-manage` binary somewhere on your `PATH`.
+
 ## Build
 
 ```sh
