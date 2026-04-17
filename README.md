@@ -30,6 +30,18 @@ scoop install codex-manage
 
 Or download the archive for your platform from the [latest GitHub release](https://github.com/AspireOne/codex-auth-manager/releases/latest), extract it, and put the `codex-manage` binary somewhere on your `PATH`.
 
+To update an existing package-manager install:
+
+```sh
+brew update
+brew upgrade codex-manage
+```
+
+```powershell
+scoop update
+scoop update codex-manage
+```
+
 ## Build
 
 ```sh
