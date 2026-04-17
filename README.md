@@ -2,9 +2,9 @@
 
 `codex-manage` is a small terminal UI for switching between multiple Codex auth profiles on the fly.
 
-<video src="docs/assets/demo.mp4" controls muted playsinline width="1440">
-  Your browser does not support embedded video. Download or view the demo at <a href="docs/assets/demo.mp4">docs/assets/demo.mp4</a>.
-</video>
+[![codex-manage demo](docs/assets/demo.gif)](docs/assets/demo.mp4)
+
+[Watch the demo video](docs/assets/demo.mp4)
 
 It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on Linux/macOS, `%USERPROFILE%\.codex\auth.json` on Windows) and lets you quickly:
 
