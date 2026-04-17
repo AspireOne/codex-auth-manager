@@ -388,7 +388,24 @@ func (m appModel) renderFooter() string {
 	case modeConfirm:
 		return footerStyle.Render(m.confirmPrompt)
 	default:
-		return footerStyle.Render("↑/↓ move • enter activate • r rename • d delete • s save • l logout • ctrl+r refresh • q quit")
+		profileCommands := []string{
+			formatKeyHint("↑/↓", "move"),
+			formatKeyHint("enter", "activate"),
+			formatKeyHint("r", "rename"),
+			formatKeyHint("d", "delete"),
+		}
+		globalCommands := []string{
+			formatKeyHint("s", "save"),
+			formatKeyHint("l", "logout"),
+			formatKeyHint("ctrl+r", "refresh"),
+			formatKeyHint("q", "quit"),
+		}
+
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			footerStyle.Render("UI: " + strings.Join(profileCommands, " • ")),
+			footerStyle.Render("Global: " + strings.Join(globalCommands, " • ")),
+		)
 	}
 }
 
@@ -730,6 +747,10 @@ func isPrintableRune(r rune) bool {
 	return r >= 32 && r != 127
 }
 
+func formatKeyHint(key, action string) string {
+	return keyHintStyle.Render(key) + " " + action
+}
+
 func indexOf(xs []string, target string) int {
 	for i, x := range xs {
 		if x == target {
@@ -765,6 +786,10 @@ var (
 				Foreground(selectedGlow)
 
 	footerStyle = lipgloss.NewStyle().
+			Foreground(mutedColor)
+
+	keyHintStyle = lipgloss.NewStyle().
+			Bold(true).
 			Foreground(mutedColor)
 
 	statusStyle = lipgloss.NewStyle().
