@@ -357,11 +357,9 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.setError(err.Error())
 				return m.exitConfirm(), nil
 			}
+			var markerErr error
 			if m.currentProfile == name {
-				if err := clearCurrentProfileMarker(m.currentProfileFile); err != nil {
-					m.setError(err.Error())
-					return m.exitConfirm(), nil
-				}
+				markerErr = clearCurrentProfileMarker(m.currentProfileFile)
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
@@ -369,6 +367,10 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			if m.cursor >= len(m.profiles) && m.cursor > 0 {
 				m.cursor--
+			}
+			if markerErr != nil {
+				m.setError(markerErr.Error())
+				return m.exitConfirm(), nil
 			}
 			m.setStatus(fmt.Sprintf("Deleted profile %q.", name))
 			return m.exitConfirm(), nil
@@ -382,12 +384,13 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.setError(err.Error())
 				return m.exitConfirm(), nil
 			}
-			if err := clearCurrentProfileMarker(m.currentProfileFile); err != nil {
+			markerErr := clearCurrentProfileMarker(m.currentProfileFile)
+			if err := m.reload(); err != nil {
 				m.setError(err.Error())
 				return m.exitConfirm(), nil
 			}
-			if err := m.reload(); err != nil {
-				m.setError(err.Error())
+			if markerErr != nil {
+				m.setError(markerErr.Error())
 				return m.exitConfirm(), nil
 			}
 			m.setStatus("Logged out.")
@@ -530,26 +533,14 @@ func (m *appModel) reload() error {
 		return nil
 	}
 
-	marker, err := readCurrentProfileMarker(m.currentProfileFile, m.profileDir)
+	marker, err := resolveCurrentProfileMarker(m.authFile, m.currentProfileFile, m.profileDir, m.profiles)
 	if err != nil {
 		return err
 	}
-	if marker.Name != "" {
-		authIdentity, idErr := readAuthIdentity(m.authFile)
-		if idErr == nil && marker.Identity.matches(authIdentity) {
-			m.currentProfile = marker.Name
-			return nil
-		}
-	}
-
-	cur, err := currentProfile(m.authFile, []string{m.profileDir}, m.profiles)
-	if err != nil && !errors.Is(err, errNoMatchingProfile) {
-		return err
-	}
-	if errors.Is(err, errNoMatchingProfile) {
+	if marker.Name == "" {
 		m.currentProfile = ""
 	} else {
-		m.currentProfile = cur
+		m.currentProfile = marker.Name
 	}
 
 	return nil
@@ -559,7 +550,7 @@ func (m *appModel) syncTrackedProfile() error {
 	if !m.authActive || m.currentProfile == "" {
 		return nil
 	}
-	marker, err := readCurrentProfileMarker(m.currentProfileFile, m.profileDir)
+	marker, err := resolveCurrentProfileMarker(m.authFile, m.currentProfileFile, m.profileDir, m.profiles)
 	if err != nil {
 		return err
 	}
@@ -817,11 +808,54 @@ func readCurrentProfileMarker(path, profileDir string) (currentProfileMarker, er
 	if marker.Name == "" {
 		return currentProfileMarker{}, nil
 	}
-	if !fileExists(filepath.Join(profileDir, marker.Name)) {
+	profilePath := filepath.Join(profileDir, marker.Name)
+	if !fileExists(profilePath) {
 		return currentProfileMarker{}, nil
+	}
+	if !marker.Identity.hasUsableIdentity() {
+		identity, err := readAuthIdentity(profilePath)
+		if err != nil {
+			return currentProfileMarker{}, err
+		}
+		marker.Identity = identity
 	}
 
 	return marker, nil
+}
+
+func resolveCurrentProfileMarker(authFile, markerPath, profileDir string, profiles []string) (currentProfileMarker, error) {
+	authIdentity, err := readAuthIdentity(authFile)
+	if err != nil {
+		return currentProfileMarker{}, nil
+	}
+
+	marker, err := readCurrentProfileMarker(markerPath, profileDir)
+	if err != nil {
+		return currentProfileMarker{}, err
+	}
+	if marker.Name != "" && marker.Identity.matches(authIdentity) {
+		if err := writeCurrentProfileMarker(markerPath, marker); err != nil {
+			return currentProfileMarker{}, err
+		}
+		return marker, nil
+	}
+
+	name, err := currentProfile(authFile, []string{profileDir}, profiles)
+	if err != nil {
+		if errors.Is(err, errNoMatchingProfile) {
+			return currentProfileMarker{}, nil
+		}
+		return currentProfileMarker{}, err
+	}
+
+	resolved := currentProfileMarker{
+		Name:     name,
+		Identity: authIdentity,
+	}
+	if err := writeCurrentProfileMarker(markerPath, resolved); err != nil {
+		return currentProfileMarker{}, err
+	}
+	return resolved, nil
 }
 
 func writeCurrentProfileMarker(path string, marker currentProfileMarker) error {
@@ -962,6 +996,10 @@ func (a authIdentity) matches(other authIdentity) bool {
 		return a.APIKeyHash != "" && a.APIKeyHash == other.APIKeyHash
 	}
 	return false
+}
+
+func (a authIdentity) hasUsableIdentity() bool {
+	return a.AuthMode != "" || a.AccountID != "" || a.APIKeyHash != ""
 }
 
 func logoutAuth(authFile string) error {
