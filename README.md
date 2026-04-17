@@ -15,10 +15,17 @@ This is useful if you regularly work with multiple Codex accounts and want a fas
 
 ## Install
 
-With Homebrew:
+On macOS or Linux, install with Homebrew:
 
 ```sh
 brew install AspireOne/tap/codex-manage
+```
+
+On Windows, install with Scoop:
+
+```powershell
+scoop bucket add AspireOne https://github.com/AspireOne/scoop-bucket
+scoop install codex-manage
 ```
 
 Or download the archive for your platform from the [latest GitHub release](https://github.com/AspireOne/codex-auth-manager/releases/latest), extract it, and put the `codex-manage` binary somewhere on your `PATH`.
