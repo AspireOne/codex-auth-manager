@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	profilemgr "codex-manage/internal/profiles"
 )
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -116,16 +118,8 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		value := strings.TrimSpace(m.inputValue)
 		switch m.pendingAction {
 		case actionSave:
-			if err := saveCurrentAuth(m.authFile, m.profileDir, value); err != nil {
-				m.setError(err.Error())
-				return m.exitMode(), nil
-			}
-			marker, err := markerForProfile(m.profileDir, value)
-			if err != nil {
-				return m.reloadAndExitWithError(err), nil
-			}
-			if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-				return m.reloadAndExitWithError(err), nil
+			if err := m.profileManager.SaveCurrent(value); err != nil {
+				return m.handleActionError(err), nil
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
@@ -136,18 +130,8 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		case actionRename:
 			oldName := m.selectedProfile()
-			if err := renameProfile(m.profileDir, oldName, value); err != nil {
-				m.setError(err.Error())
-				return m.exitMode(), nil
-			}
-			if m.currentProfile == oldName {
-				marker, err := markerForProfile(m.profileDir, value)
-				if err != nil {
-					return m.reloadAndExitWithError(err), nil
-				}
-				if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-					return m.reloadAndExitWithError(err), nil
-				}
+			if err := m.profileManager.Rename(oldName, value, m.currentProfile); err != nil {
+				return m.handleActionError(err), nil
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
@@ -187,13 +171,8 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch m.pendingAction {
 		case actionDelete:
 			name := m.selectedProfile()
-			if err := deleteProfile(m.profileDir, name); err != nil {
-				m.setError(err.Error())
-				return m.exitMode(), nil
-			}
-			var markerErr error
-			if m.currentProfile == name {
-				markerErr = clearCurrentProfileMarker(m.currentProfileFile)
+			if err := m.profileManager.Delete(name, m.currentProfile); err != nil {
+				return m.handleActionError(err), nil
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
@@ -202,29 +181,15 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.cursor >= len(m.profiles) && m.cursor > 0 {
 				m.cursor--
 			}
-			if markerErr != nil {
-				m.setError(markerErr.Error())
-				return m.exitMode(), nil
-			}
 			m.setStatus(fmt.Sprintf("Deleted profile %q.", name))
 			return m.exitMode(), nil
 
 		case actionLogout:
-			if err := m.syncTrackedProfile(); err != nil {
-				m.setError(err.Error())
-				return m.exitMode(), nil
+			if err := m.profileManager.Logout(); err != nil {
+				return m.handleActionError(err), nil
 			}
-			if err := logoutAuth(m.authFile); err != nil {
-				m.setError(err.Error())
-				return m.exitMode(), nil
-			}
-			markerErr := clearCurrentProfileMarker(m.currentProfileFile)
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
-				return m.exitMode(), nil
-			}
-			if markerErr != nil {
-				m.setError(markerErr.Error())
 				return m.exitMode(), nil
 			}
 			m.setStatus("Logged out.")
@@ -233,4 +198,12 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *appModel) handleActionError(err error) appModel {
+	if errors.Is(err, profilemgr.ErrStateChanged) {
+		return m.reloadAndExitWithError(err)
+	}
+	m.setError(err.Error())
+	return m.exitMode()
 }

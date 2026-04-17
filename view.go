@@ -44,7 +44,7 @@ func (m appModel) renderHeader() string {
 		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
 		fmt.Sprintf("Auth status:     %s", currentTag.Render(authState)),
 		fmt.Sprintf("Saved profiles:  %s", headerValue.Render(fmt.Sprintf("%d", len(m.profiles)))),
-		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileDir)),
+		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileManager.ProfileDir)),
 	)
 
 	return panelStyle.Render(body)

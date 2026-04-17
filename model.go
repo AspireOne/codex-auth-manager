@@ -1,12 +1,10 @@
 package main
 
 import (
-	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
+	profilemgr "codex-manage/internal/profiles"
 )
 
 type mode int
@@ -27,14 +25,8 @@ const (
 	actionLogout
 )
 
-const currentProfileMarkerName = "current-profile"
-
 type appModel struct {
-	codexDir           string
-	authFile           string
-	profileDir         string
-	legacyProfileDir   string
-	currentProfileFile string
+	profileManager profilemgr.Manager
 
 	profiles []string
 	cursor   int
@@ -58,14 +50,9 @@ type appModel struct {
 
 func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
-	managerDir := filepath.Join(codexDir, "auth_manager")
 	return appModel{
-		codexDir:           codexDir,
-		authFile:           filepath.Join(codexDir, "auth.json"),
-		profileDir:         filepath.Join(managerDir, "profiles"),
-		legacyProfileDir:   managerDir,
-		currentProfileFile: filepath.Join(managerDir, currentProfileMarkerName),
-		status:             "Ready.",
+		profileManager: profilemgr.NewManager(codexDir),
+		status:         "Ready.",
 	}
 }
 
@@ -78,21 +65,11 @@ func (m appModel) Init() tea.Cmd {
 }
 
 func (m *appModel) reload() error {
-	if err := os.MkdirAll(m.profileDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create profile directory: %w", err)
-	}
-	if err := os.MkdirAll(m.legacyProfileDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create legacy profile directory: %w", err)
-	}
-	if err := migrateLegacyProfiles(m.legacyProfileDir, m.profileDir); err != nil {
-		return err
-	}
-
-	profiles, err := listProfiles(m.profileDir)
+	snapshot, err := m.profileManager.Snapshot()
 	if err != nil {
 		return err
 	}
-	m.profiles = profiles
+	m.profiles = snapshot.Profiles
 
 	if len(m.profiles) == 0 {
 		m.cursor = 0
@@ -100,55 +77,19 @@ func (m *appModel) reload() error {
 		m.cursor = len(m.profiles) - 1
 	}
 
-	m.authActive = fileExists(m.authFile)
-	if !m.authActive {
-		m.currentProfile = ""
-		return nil
-	}
-
-	marker, err := resolveCurrentProfileMarker(m.authFile, m.currentProfileFile, m.profileDir, m.profiles)
-	if err != nil {
-		return err
-	}
-	m.currentProfile = marker.Name
-
+	m.authActive = snapshot.AuthActive
+	m.currentProfile = snapshot.CurrentProfile
 	return nil
 }
 
 func (m *appModel) syncTrackedProfile() error {
-	if !m.authActive {
-		return nil
-	}
-	marker, err := resolveCurrentProfileMarker(m.authFile, m.currentProfileFile, m.profileDir, m.profiles)
-	if err != nil {
-		return err
-	}
-	if marker.Name == "" {
-		return nil
-	}
-	return syncProfileFromAuth(m.authFile, m.profileDir, marker)
+	return m.profileManager.SyncTrackedProfile()
 }
 
 func (m *appModel) activateSelectedProfile(name string) error {
-	if err := m.syncTrackedProfile(); err != nil {
+	if err := m.profileManager.Activate(name); err != nil {
 		return err
 	}
-	if err := activateProfile(m.authFile, []string{m.profileDir, m.legacyProfileDir}, name); err != nil {
-		return err
-	}
-
-	marker, err := markerForProfile(m.profileDir, name)
-	if err != nil {
-		m.currentProfile = ""
-		_ = clearCurrentProfileMarker(m.currentProfileFile)
-		return err
-	}
-	if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-		m.currentProfile = ""
-		_ = clearCurrentProfileMarker(m.currentProfileFile)
-		return fmt.Errorf("activated profile %q, but failed to track it: %v", name, err)
-	}
-
 	return m.reload()
 }
 
@@ -220,5 +161,3 @@ func (m *appModel) reloadAndExitWithError(err error) appModel {
 	}
 	return m.exitMode()
 }
-
-var errNoMatchingProfile = errors.New("no matching saved profile")
