@@ -67,6 +67,25 @@ func TestManagerLogoutReturnsErrStateChangedAfterAuthIsRemoved(t *testing.T) {
 	assertFileMissing(t, paths.authFile)
 }
 
+func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
+	codexDir := t.TempDir()
+	m := NewManager(codexDir)
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	if snapshot.AuthActive {
+		t.Fatalf("Snapshot().AuthActive = true, want false")
+	}
+	if len(snapshot.Profiles) != 0 {
+		t.Fatalf("Snapshot().Profiles = %#v, want empty", snapshot.Profiles)
+	}
+	assertDirExists(t, filepath.Join(codexDir, "auth_manager"))
+	assertDirExists(t, filepath.Join(codexDir, "auth_manager", "profiles"))
+}
+
 type testManagerPaths struct {
 	authFile   string
 	profileDir string
@@ -168,5 +187,17 @@ func assertFileMissing(t *testing.T, path string) {
 
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Stat(%q) = %v, want not exists", path, err)
+	}
+}
+
+func assertDirExists(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%q is a file, want directory", path)
 	}
 }
