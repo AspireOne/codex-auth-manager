@@ -69,7 +69,7 @@ Sleep 900ms
 Up
 Sleep 900ms
 Type "d"
-Wait+Screen /Delete profile "demo"\? \[y\/N\]/
+Wait+Screen /Delete saved profile "demo"\? \[y\/N\]/
 Sleep 1100ms
 Type "y"
 Wait+Screen /Deleted profile "demo"\./
@@ -77,7 +77,7 @@ Sleep 1800ms
 
 # Log out by removing the active auth.json.
 Type "l"
-Wait+Screen /Remove current auth\.json and log out\? \[y\/N\]/
+Wait+Screen /Remove active auth\.json\? Saved profiles stay untouched\. \[y\/N\]/
 Sleep 1100ms
 Type "y"
 Wait+Screen /Logged out\./

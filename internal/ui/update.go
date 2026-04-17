@@ -76,14 +76,19 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No profiles to delete.")
 			return m, nil
 		}
-		return m.enterConfirm(actionDelete, fmt.Sprintf("Delete profile %q? [y/N]", m.selectedProfile())), nil
+		name := m.selectedProfile()
+		prompt := fmt.Sprintf("Delete saved profile %q? [y/N]", name)
+		if name == m.currentProfile {
+			prompt = fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", name)
+		}
+		return m.enterConfirm(actionDelete, prompt), nil
 
 	case "l":
 		if !m.authActive {
 			m.setError("Already logged out.")
 			return m, nil
 		}
-		return m.enterConfirm(actionLogout, "Remove current auth.json and log out? [y/N]"), nil
+		return m.enterConfirm(actionLogout, "Remove active auth.json? Saved profiles stay untouched. [y/N]"), nil
 
 	case keyEnter:
 		if len(m.profiles) == 0 {

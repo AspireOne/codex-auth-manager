@@ -124,12 +124,79 @@ func TestRestartRequired(t *testing.T) {
 	}
 }
 
+func TestDeleteConfirmationPromptText(t *testing.T) {
+	tests := []struct {
+		name           string
+		profiles       []string
+		cursor         int
+		currentProfile string
+		want           string
+	}{
+		{
+			name:           "non-current profile",
+			profiles:       []string{testWorkProfileName, "side"},
+			cursor:         1,
+			currentProfile: testWorkProfileName,
+			want:           `Delete saved profile "side"? [y/N]`,
+		},
+		{
+			name:           "current profile",
+			profiles:       []string{testWorkProfileName, "side"},
+			cursor:         0,
+			currentProfile: testWorkProfileName,
+			want:           fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", testWorkProfileName),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := appModel{
+				profiles:       tt.profiles,
+				cursor:         tt.cursor,
+				currentProfile: tt.currentProfile,
+				authActive:     true,
+			}
+
+			updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "d"}))
+			got := updatedModel.(appModel)
+
+			if got.mode != modeConfirm {
+				t.Fatalf("mode = %v, want %v", got.mode, modeConfirm)
+			}
+			if got.pendingAction != actionDelete {
+				t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionDelete)
+			}
+			if got.confirmPrompt != tt.want {
+				t.Fatalf("confirmPrompt = %q, want %q", got.confirmPrompt, tt.want)
+			}
+		})
+	}
+}
+
+func TestLogoutConfirmationPromptText(t *testing.T) {
+	m := appModel{authActive: true}
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	got := updatedModel.(appModel)
+
+	if got.mode != modeConfirm {
+		t.Fatalf("mode = %v, want %v", got.mode, modeConfirm)
+	}
+	if got.pendingAction != actionLogout {
+		t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionLogout)
+	}
+	want := "Remove active auth.json? Saved profiles stay untouched. [y/N]"
+	if got.confirmPrompt != want {
+		t.Fatalf("confirmPrompt = %q, want %q", got.confirmPrompt, want)
+	}
+}
+
 func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	home := t.TempDir()
 	codexDir := filepath.Join(home, ".codex")
 	authPath := filepath.Join(codexDir, "auth.json")
 	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
-	profilePath := filepath.Join(profileDir, "work")
+	profilePath := filepath.Join(profileDir, testWorkProfileName)
 	auth := []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n")
 
 	if err := os.MkdirAll(profileDir, 0o700); err != nil {
