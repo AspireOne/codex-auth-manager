@@ -262,6 +262,38 @@ func TestManagerSnapshotIgnoresInvalidProfileFiles(t *testing.T) {
 	}
 
 	assertProfiles(t, snapshot.Profiles, []string{"valid"})
+	if len(snapshot.InvalidProfiles) != 1 {
+		t.Fatalf("Snapshot().InvalidProfiles = %#v, want one invalid profile", snapshot.InvalidProfiles)
+	}
+	if snapshot.InvalidProfiles[0].Name != "corrupt" {
+		t.Fatalf("invalid profile name = %q, want corrupt", snapshot.InvalidProfiles[0].Name)
+	}
+	if snapshot.InvalidProfiles[0].Reason != "invalid JSON" {
+		t.Fatalf("invalid profile reason = %q, want invalid JSON", snapshot.InvalidProfiles[0].Reason)
+	}
+}
+
+func TestManagerSnapshotReportsInvalidLegacyProfileFiles(t *testing.T) {
+	m, paths := newTestManager(t)
+	if err := os.WriteFile(filepath.Join(paths.legacyDir, "corrupt-legacy"), []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile corrupt legacy profile: %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	assertProfiles(t, snapshot.Profiles, nil)
+	if len(snapshot.InvalidProfiles) != 1 {
+		t.Fatalf("Snapshot().InvalidProfiles = %#v, want one invalid profile", snapshot.InvalidProfiles)
+	}
+	if snapshot.InvalidProfiles[0].Name != "corrupt-legacy" {
+		t.Fatalf("invalid legacy profile name = %q, want corrupt-legacy", snapshot.InvalidProfiles[0].Name)
+	}
+	if snapshot.InvalidProfiles[0].Reason != "invalid JSON" {
+		t.Fatalf("invalid legacy profile reason = %q, want invalid JSON", snapshot.InvalidProfiles[0].Reason)
+	}
 }
 
 func TestManagerSnapshotMigratesLegacyConflictKeepingBothProfiles(t *testing.T) {

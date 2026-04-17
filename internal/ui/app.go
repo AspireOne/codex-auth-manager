@@ -37,8 +37,9 @@ const (
 type appModel struct {
 	profileManager profilemgr.Manager
 
-	profiles []string
-	cursor   int
+	profiles        []string
+	cursor          int
+	invalidProfiles []profilemgr.ProfileIssue
 
 	currentProfile string
 	authActive     bool
@@ -94,6 +95,7 @@ func (m *appModel) reload() error {
 		return err
 	}
 	m.profiles = snapshot.Profiles
+	m.invalidProfiles = snapshot.InvalidProfiles
 
 	if len(m.profiles) == 0 {
 		m.cursor = 0

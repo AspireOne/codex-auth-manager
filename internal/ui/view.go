@@ -15,10 +15,16 @@ func (m appModel) View() tea.View {
 
 	header := m.renderHeader()
 	list := m.renderList()
+	diagnostics := m.renderDiagnostics()
 	footer := m.renderFooter()
 	status := m.renderStatus()
 
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", list, "", footer, "", status)
+	parts := []string{header, "", list}
+	if diagnostics != "" {
+		parts = append(parts, "", diagnostics)
+	}
+	parts = append(parts, "", footer, "", status)
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return tea.NewView(baseStyle.Render(content))
 }
 
@@ -102,6 +108,25 @@ func (m appModel) renderFooter() string {
 			footerStyle.Render("Global: "+strings.Join(globalCommands, " • ")),
 		)
 	}
+}
+
+func (m appModel) renderDiagnostics() string {
+	if len(m.invalidProfiles) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		warningStyle.Render(fmt.Sprintf("Ignored %d invalid profile file(s):", len(m.invalidProfiles))),
+	}
+	for i, issue := range m.invalidProfiles {
+		if i == 3 {
+			lines = append(lines, footerStyle.Render(fmt.Sprintf("...and %d more", len(m.invalidProfiles)-i)))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", headerValue.Render(issue.Name), footerStyle.Render(issue.Reason)))
+	}
+
+	return panelStyle.Render(strings.Join(lines, "\n"))
 }
 
 func (m appModel) renderStatus() string {

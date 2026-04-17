@@ -17,9 +17,15 @@ import (
 const CurrentProfileMarkerName = "current-profile"
 
 type Snapshot struct {
-	Profiles       []string
-	CurrentProfile string
-	AuthActive     bool
+	Profiles        []string
+	InvalidProfiles []ProfileIssue
+	CurrentProfile  string
+	AuthActive      bool
+}
+
+type ProfileIssue struct {
+	Name   string
+	Reason string
 }
 
 type Manager struct {
@@ -29,7 +35,15 @@ type Manager struct {
 	CurrentProfileFile string
 }
 
-var ErrStateChanged = errors.New("operation changed persisted state before failing")
+var (
+	ErrStateChanged     = errors.New("operation changed persisted state before failing")
+	errNoUsableIdentity = errors.New("auth file does not contain a usable identity")
+)
+
+type profileScan struct {
+	Profiles        []string
+	InvalidProfiles []ProfileIssue
+}
 
 type authFileData struct {
 	AuthMode     string `json:"auth_mode"`
@@ -71,20 +85,21 @@ func (m Manager) Snapshot() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 
-	profiles, err := listProfiles(m.ProfileDir)
+	scan, err := scanProfiles(m.ProfileDir, m.LegacyProfileDir)
 	if err != nil {
 		return Snapshot{}, err
 	}
 
 	snapshot := Snapshot{
-		Profiles:   profiles,
-		AuthActive: fileExists(m.AuthFile),
+		Profiles:        scan.Profiles,
+		InvalidProfiles: scan.InvalidProfiles,
+		AuthActive:      fileExists(m.AuthFile),
 	}
 	if !snapshot.AuthActive {
 		return snapshot, nil
 	}
 
-	marker, err := resolveCurrentProfileMarker(m.AuthFile, m.CurrentProfileFile, m.ProfileDir, profiles)
+	marker, err := resolveCurrentProfileMarker(m.AuthFile, m.CurrentProfileFile, m.ProfileDir, scan.Profiles)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -191,8 +206,18 @@ func (m Manager) Logout() error {
 }
 
 func listProfiles(dirs ...string) ([]string, error) {
+	scan, err := scanProfiles(dirs...)
+	if err != nil {
+		return nil, err
+	}
+	return scan.Profiles, nil
+}
+
+func scanProfiles(dirs ...string) (profileScan, error) {
 	seen := make(map[string]struct{})
+	seenInvalid := make(map[string]struct{})
 	var profiles []string
+	var invalidProfiles []ProfileIssue
 
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -200,7 +225,7 @@ func listProfiles(dirs ...string) ([]string, error) {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, fmt.Errorf("failed to read profile directory: %w", err)
+			return profileScan{}, fmt.Errorf("failed to read profile directory: %w", err)
 		}
 
 		for _, entry := range entries {
@@ -212,6 +237,15 @@ func listProfiles(dirs ...string) ([]string, error) {
 				continue
 			}
 			if _, err := readAuthIdentity(filepath.Join(dir, name)); err != nil {
+				key := filepath.Join(dir, name)
+				if _, ok := seenInvalid[key]; ok {
+					continue
+				}
+				seenInvalid[key] = struct{}{}
+				invalidProfiles = append(invalidProfiles, ProfileIssue{
+					Name:   name,
+					Reason: profileIssueReason(err),
+				})
 				continue
 			}
 			if _, ok := seen[name]; ok {
@@ -223,7 +257,10 @@ func listProfiles(dirs ...string) ([]string, error) {
 	}
 
 	sort.Strings(profiles)
-	return profiles, nil
+	sort.Slice(invalidProfiles, func(i, j int) bool {
+		return invalidProfiles[i].Name < invalidProfiles[j].Name
+	})
+	return profileScan{Profiles: profiles, InvalidProfiles: invalidProfiles}, nil
 }
 
 var errNoMatchingProfile = errors.New("no matching saved profile")
@@ -582,10 +619,28 @@ func readAuthIdentity(path string) (authIdentity, error) {
 	}
 
 	if identity.AuthMode == "" && identity.AccountID == "" && identity.APIKeyHash == "" {
-		return authIdentity{}, fmt.Errorf("auth file %s does not contain a usable identity", path)
+		return authIdentity{}, fmt.Errorf("auth file %s: %w", path, errNoUsableIdentity)
 	}
 
 	return identity, nil
+}
+
+func profileIssueReason(err error) string {
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return "invalid JSON"
+	}
+
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return "invalid auth JSON shape"
+	}
+
+	if errors.Is(err, errNoUsableIdentity) {
+		return "missing usable identity"
+	}
+
+	return "unreadable profile"
 }
 
 func (a authIdentity) matches(other authIdentity) bool {

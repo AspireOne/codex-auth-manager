@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -165,5 +166,33 @@ func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	}
 	if got.errText != "" {
 		t.Fatalf("errText = %q, want empty", got.errText)
+	}
+}
+
+func TestInvalidProfileDiagnosticsAreRendered(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".codex", "auth_manager", "profiles")
+
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "corrupt"), []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile corrupt profile: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	view := fmt.Sprint(m.View())
+	for _, want := range []string{
+		"Ignored 1 invalid profile file(s):",
+		"corrupt",
+		"invalid JSON",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q:\n%s", want, view)
+		}
 	}
 }
