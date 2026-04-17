@@ -2,6 +2,8 @@
 
 `codex-manage` is a small terminal UI for switching between multiple Codex auth profiles on the fly.
 
+![codex-manage screenshot](screenshot.png)
+
 It keeps saved profiles next to your local Codex config and lets you quickly:
 
 - save the current `~/.codex/auth.json` as a named profile
