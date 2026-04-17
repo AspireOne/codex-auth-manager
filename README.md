@@ -21,6 +21,16 @@ make build
 
 This produces a Linux `amd64` binary named `codex-manage`.
 
+## Release
+
+Create and push a release tag with:
+
+```powershell
+./release.ps1 v0.1.0
+```
+
+That script runs tests, creates an annotated git tag, and pushes it to `origin`. GitHub Actions then builds release archives for Linux, macOS, and Windows, publishes a GitHub release, and includes the commits since the previous tag in the release notes.
+
 ## Run
 
 ```sh

@@ -1,0 +1,264 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to publish, for example v1.0.0
+        required: true
+        type: string
+      target:
+        description: Commit, branch, or ref to release from
+        required: false
+        default: main
+        type: string
+      prerelease:
+        description: Mark the GitHub release as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          PUSH_VERSION: ${{ github.ref_name }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            TARGET="$INPUT_TARGET"
+            if [ -z "$TARGET" ]; then
+              TARGET="main"
+            fi
+            PRERELEASE="$INPUT_PRERELEASE"
+          else
+            VERSION="$PUSH_VERSION"
+            TARGET="$PUSH_SHA"
+            if [[ "$VERSION" == *-* ]]; then
+              PRERELEASE=true
+            else
+              PRERELEASE=false
+            fi
+          fi
+
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like v1.0.0 or v1.0.0-rc.1"
+            exit 1
+          fi
+
+          git rev-parse "$TARGET^{commit}" >/dev/null
+          TARGET_SHA="$(git rev-parse "$TARGET^{commit}")"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure release tag exists for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TARGET_SHA: ${{ steps.meta.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists locally"
+          else
+            git tag "$VERSION" "$TARGET_SHA"
+          fi
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists on the remote"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/$VERSION" \
+              -f sha="$TARGET_SHA" >/dev/null
+          fi
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build release archives
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          APP_NAME="codex-manage"
+          VERSION_TRIMMED="${VERSION#v}"
+          mkdir -p dist
+
+          build_target() {
+            local goos="$1"
+            local goarch="$2"
+            local ext=""
+            local archive_ext="tar.gz"
+            local staging_dir="dist/${APP_NAME}_${goos}_${goarch}"
+            local binary_name="$APP_NAME"
+
+            if [ "$goos" = "windows" ]; then
+              ext=".exe"
+              archive_ext="zip"
+              binary_name="${APP_NAME}.exe"
+            fi
+
+            rm -rf "$staging_dir"
+            mkdir -p "$staging_dir"
+
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w" -o "$staging_dir/$binary_name" ./cmd/codex-manage
+
+            cp README.md "$staging_dir/"
+
+            local archive_base="${APP_NAME}_${VERSION_TRIMMED}_${goos}_${goarch}"
+            if [ "$archive_ext" = "zip" ]; then
+              (
+                cd "$staging_dir"
+                zip -q -r "../${archive_base}.zip" .
+              )
+            else
+              tar -C "$staging_dir" -czf "dist/${archive_base}.tar.gz" .
+            fi
+          }
+
+          build_target darwin amd64
+          build_target darwin arm64
+          build_target linux amd64
+          build_target linux arm64
+          build_target windows amd64
+          build_target windows arm64
+
+          (
+            cd dist
+            sha256sum \
+              codex-manage_${VERSION_TRIMMED}_darwin_amd64.tar.gz \
+              codex-manage_${VERSION_TRIMMED}_darwin_arm64.tar.gz \
+              codex-manage_${VERSION_TRIMMED}_linux_amd64.tar.gz \
+              codex-manage_${VERSION_TRIMMED}_linux_arm64.tar.gz \
+              codex-manage_${VERSION_TRIMMED}_windows_amd64.zip \
+              codex-manage_${VERSION_TRIMMED}_windows_arm64.zip \
+              > SHA256SUMS.txt
+          )
+
+      - name: Generate release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TARGET_SHA: ${{ steps.meta.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          PREVIOUS_TAG="$(
+            git tag --sort=-version:refname \
+              | grep '^v' \
+              | grep -Fxv "$VERSION" \
+              | head -n 1 || true
+          )"
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            git log --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..${TARGET_SHA}" > dist/commit-list.md
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$VERSION" \
+              -f target_commitish="$TARGET_SHA" \
+              -f previous_tag_name="$PREVIOUS_TAG" \
+              --jq .body > dist/generated-notes.md
+          else
+            git log --pretty=format:'- %s (%h)' "$TARGET_SHA" > dist/commit-list.md
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$VERSION" \
+              -f target_commitish="$TARGET_SHA" \
+              --jq .body > dist/generated-notes.md
+          fi
+
+          cat > dist/release-notes.md <<EOF
+          ## Downloads
+
+          - \`codex-manage_${VERSION#v}_darwin_amd64.tar.gz\`
+          - \`codex-manage_${VERSION#v}_darwin_arm64.tar.gz\`
+          - \`codex-manage_${VERSION#v}_linux_amd64.tar.gz\`
+          - \`codex-manage_${VERSION#v}_linux_arm64.tar.gz\`
+          - \`codex-manage_${VERSION#v}_windows_amd64.zip\`
+          - \`codex-manage_${VERSION#v}_windows_arm64.zip\`
+          - \`SHA256SUMS.txt\`
+
+          ## Commits In This Release
+
+          EOF
+
+          if [ -s dist/commit-list.md ]; then
+            cat dist/commit-list.md >> dist/release-notes.md
+          else
+            echo "- No commits found." >> dist/release-notes.md
+          fi
+
+          printf "\n\n" >> dist/release-notes.md
+          cat dist/generated-notes.md >> dist/release-notes.md
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TARGET_SHA: ${{ steps.meta.outputs.target_sha }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          VERSION_TRIMMED="${VERSION#v}"
+          args=(
+            "$VERSION"
+            "dist/codex-manage_${VERSION_TRIMMED}_darwin_amd64.tar.gz#macOS amd64"
+            "dist/codex-manage_${VERSION_TRIMMED}_darwin_arm64.tar.gz#macOS arm64"
+            "dist/codex-manage_${VERSION_TRIMMED}_linux_amd64.tar.gz#Linux amd64"
+            "dist/codex-manage_${VERSION_TRIMMED}_linux_arm64.tar.gz#Linux arm64"
+            "dist/codex-manage_${VERSION_TRIMMED}_windows_amd64.zip#Windows amd64"
+            "dist/codex-manage_${VERSION_TRIMMED}_windows_arm64.zip#Windows arm64"
+            "dist/SHA256SUMS.txt#Checksums"
+            "--title" "codex-manage $VERSION"
+            "--target" "$TARGET_SHA"
+            "--notes-file" "dist/release-notes.md"
+            "--verify-tag"
+          )
+
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=("--prerelease")
+          fi
+
+          gh release create "${args[@]}"
