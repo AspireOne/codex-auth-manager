@@ -80,6 +80,7 @@ jobs:
             homepage "https://github.com/${GITHUB_REPOSITORY}"
             url "${SOURCE_URL}"
             sha256 "${SHA256}"
+            license "GPL-3.0-only"
             version "${VERSION#v}"
 
             depends_on "go" => :build
