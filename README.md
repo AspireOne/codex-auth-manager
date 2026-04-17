@@ -4,9 +4,9 @@
 
 ![codex-manage screenshot](screenshot.png)
 
-It keeps saved profiles next to your local Codex config and lets you quickly:
+It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on Linux/macOS, `%USERPROFILE%\.codex\auth.json` on Windows) and lets you quickly:
 
-- save the current `~/.codex/auth.json` as a named profile
+- save the current auth file as a named profile
 - activate another saved profile
 - rename or delete saved profiles
 - log out by removing the active `auth.json`
@@ -19,11 +19,17 @@ This is useful if you regularly work with multiple Codex accounts and want a fas
 make build
 ```
 
-This produces a Linux `amd64` binary named `codex-manage`.
+This produces a binary named `codex-manage` (or `codex-manage.exe` on Windows) in the `dist/` directory.
+
+You can also build directly with Go:
+
+```sh
+go build -o dist/ ./cmd/codex-manage
+```
 
 ## Release
 
-Create and push a release tag with:
+Create and push a release tag with (PowerShell):
 
 ```powershell
 ./release.ps1 v0.1.0
@@ -34,5 +40,7 @@ That script runs tests, creates an annotated git tag, and pushes it to `origin`.
 ## Run
 
 ```sh
-./codex-manage
+./dist/codex-manage
 ```
+
+(Or `./dist/codex-manage.exe` on Windows)
