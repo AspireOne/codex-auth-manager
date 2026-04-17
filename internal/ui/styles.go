@@ -6,6 +6,7 @@ var (
 	accentColor  = lipgloss.Color("#8B5CF6")
 	accentSoft   = lipgloss.Color("#C4B5FD")
 	successColor = lipgloss.Color("#10B981")
+	infoColor    = lipgloss.Color("#38BDF8")
 	errorColor   = lipgloss.Color("#F87171")
 	mutedColor   = lipgloss.Color("#94A3B8")
 	panelBorder  = lipgloss.Color("#A78BFA")
@@ -36,6 +37,10 @@ var (
 
 	statusStyle = lipgloss.NewStyle().
 			Foreground(successColor).
+			Bold(true)
+
+	infoStyle = lipgloss.NewStyle().
+			Foreground(infoColor).
 			Bold(true)
 
 	errorStyle = lipgloss.NewStyle().

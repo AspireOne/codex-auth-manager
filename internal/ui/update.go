@@ -86,6 +86,10 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := m.selectedProfile()
+		if name == m.currentProfile {
+			m.setInfo(fmt.Sprintf("Profile %q is already active.", name))
+			return m, nil
+		}
 		if err := m.activateSelectedProfile(name); err != nil {
 			m.setError(err.Error())
 			return m, nil

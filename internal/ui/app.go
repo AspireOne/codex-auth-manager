@@ -27,6 +27,13 @@ const (
 	actionLogout
 )
 
+type statusKind int
+
+const (
+	statusSuccess statusKind = iota
+	statusInfo
+)
+
 type appModel struct {
 	profileManager profilemgr.Manager
 
@@ -39,13 +46,14 @@ type appModel struct {
 	width  int
 	height int
 
-	mode          mode
-	pendingAction action
-	inputValue    string
-	inputPrompt   string
-	confirmPrompt string
-	status        string
-	errText       string
+	mode            mode
+	pendingAction   action
+	inputValue      string
+	inputPrompt     string
+	confirmPrompt   string
+	status          string
+	statusKind      statusKind
+	errText         string
 	restartRequired bool
 
 	quitting bool
@@ -118,6 +126,13 @@ func (m *appModel) selectedProfile() string {
 
 func (m *appModel) setStatus(s string) {
 	m.status = s
+	m.statusKind = statusSuccess
+	m.errText = ""
+}
+
+func (m *appModel) setInfo(s string) {
+	m.status = s
+	m.statusKind = statusInfo
 	m.errText = ""
 }
 
@@ -127,6 +142,7 @@ func (m *appModel) setError(s string) {
 
 func (m *appModel) clearMessages() {
 	m.status = ""
+	m.statusKind = statusSuccess
 	m.errText = ""
 }
 

@@ -119,3 +119,51 @@ func TestRestartRequired(t *testing.T) {
 		t.Error("restartRequired should be true after logout")
 	}
 }
+
+func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	authPath := filepath.Join(codexDir, "auth.json")
+	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
+	profilePath := filepath.Join(profileDir, "work")
+	auth := []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n")
+
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(authPath, auth, 0o600); err != nil {
+		t.Fatalf("WriteFile auth: %v", err)
+	}
+	if err := os.WriteFile(profilePath, auth, 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(m.profiles) != 1 || m.profiles[0] != "work" {
+		t.Fatalf("profiles = %#v, want [\"work\"]", m.profiles)
+	}
+	if m.currentProfile != "work" {
+		t.Fatalf("currentProfile = %q, want %q", m.currentProfile, "work")
+	}
+	m.cursor = 0
+
+	msg := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	updatedModel, _ := m.Update(msg)
+	got := updatedModel.(appModel)
+
+	if got.status != `Profile "work" is already active.` {
+		t.Fatalf("status = %q, want already-active message", got.status)
+	}
+	if got.statusKind != statusInfo {
+		t.Fatalf("statusKind = %v, want %v", got.statusKind, statusInfo)
+	}
+	if got.restartRequired {
+		t.Fatal("restartRequired = true, want false when profile is already active")
+	}
+	if got.errText != "" {
+		t.Fatalf("errText = %q, want empty", got.errText)
+	}
+}
