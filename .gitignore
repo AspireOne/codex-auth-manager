@@ -1,4 +1,4 @@
-codex-manage
+/dist/
 *.exe
 *.test
 *.out
