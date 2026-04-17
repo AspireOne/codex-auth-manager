@@ -26,6 +26,7 @@ const (
 	actionRename
 	actionDelete
 	actionLogout
+	actionActivate
 )
 
 type statusKind int

@@ -95,13 +95,10 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setInfo(fmt.Sprintf("Profile %q is already active.", name))
 			return m, nil
 		}
-		if err := m.activateSelectedProfile(name); err != nil {
-			m.setError(err.Error())
-			return m, nil
+		if m.authActive && m.currentProfile == "" {
+			return m.enterConfirm(actionActivate, fmt.Sprintf("Current auth is not saved as a profile. Replace it with %q? [y/N]", name)), nil
 		}
-		m.setStatus(fmt.Sprintf("Activated profile %q.", name))
-		m.restartRequired = true
-		return m, nil
+		return m.activateProfile(name), nil
 
 	case "F5", "ctrl+r":
 		if err := m.syncTrackedProfile(); err != nil {
@@ -127,7 +124,7 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case keyEnter:
 		value := strings.TrimSpace(m.inputValue)
 		switch m.pendingAction {
-		case actionNone, actionDelete, actionLogout:
+		case actionNone, actionDelete, actionLogout, actionActivate:
 			return m.exitMode(), nil
 		case actionSave:
 			if err := m.profileManager.SaveCurrent(value); err != nil {
@@ -183,6 +180,10 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch m.pendingAction {
 		case actionNone, actionSave, actionRename:
 			return m.exitMode(), nil
+		case actionActivate:
+			name := m.selectedProfile()
+			m = m.activateProfile(name)
+			return m.exitMode(), nil
 		case actionDelete:
 			name := m.selectedProfile()
 			if err := m.profileManager.Delete(name, m.currentProfile); err != nil {
@@ -213,6 +214,16 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *appModel) activateProfile(name string) appModel {
+	if err := m.activateSelectedProfile(name); err != nil {
+		m.setError(err.Error())
+		return *m
+	}
+	m.setStatus(fmt.Sprintf("Activated profile %q.", name))
+	m.restartRequired = true
+	return *m
 }
 
 func (m *appModel) handleActionError(err error) appModel {
