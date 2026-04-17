@@ -61,7 +61,7 @@ func (m appModel) renderList() string {
 		style := itemStyle
 
 		if i == m.cursor {
-			prefix = headerTitle.Render("›") + " "
+			prefix = headerTitle.Render("»") + " "
 			style = selectedItemStyle
 		}
 

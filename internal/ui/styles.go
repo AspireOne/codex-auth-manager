@@ -10,7 +10,6 @@ var (
 	errorColor   = lipgloss.Color("#F87171")
 	mutedColor   = lipgloss.Color("#94A3B8")
 	panelBorder  = lipgloss.Color("#A78BFA")
-	selectedGlow = lipgloss.Color("#DDD6FE")
 	headerTitle  = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
 	headerValue  = lipgloss.NewStyle().Bold(true).Foreground(accentSoft)
 	currentTag   = lipgloss.NewStyle().Foreground(successColor).Bold(true)
@@ -26,7 +25,7 @@ var (
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(selectedGlow)
+				Foreground(accentColor)
 
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
