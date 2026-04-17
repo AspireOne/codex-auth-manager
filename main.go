@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -186,7 +185,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := m.selectedProfile()
-		if err := activateProfile(m.authFile, m.profileDir, name); err != nil {
+		if err := activateProfile(m.authFile, []string{m.profileDir, m.legacyProfileDir}, name); err != nil {
 			m.setError(err.Error())
 			return m, nil
 		}
@@ -343,12 +342,14 @@ func (m appModel) renderHeader() string {
 		authState = "active"
 	}
 
-	body := fmt.Sprintf(
-		"Codex Auth Manager\n\nCurrent profile: %s\nAuth status:     %s\nSaved profiles:  %d\nProfile dir:     %s",
-		current,
-		authState,
-		len(m.profiles),
-		m.profileDir,
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		headerTitle.Render("Codex Auth Manager"),
+		"",
+		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
+		fmt.Sprintf("Auth status:     %s", currentTag.Render(authState)),
+		fmt.Sprintf("Saved profiles:  %s", headerValue.Render(fmt.Sprintf("%d", len(m.profiles)))),
+		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileDir)),
 	)
 
 	return panelStyle.Render(body)
@@ -365,13 +366,13 @@ func (m appModel) renderList() string {
 		style := itemStyle
 
 		if i == m.cursor {
-			prefix = "› "
+			prefix = headerTitle.Render("›") + " "
 			style = selectedItemStyle
 		}
 
 		label := p
 		if p == m.currentProfile {
-			label += "  • current"
+			label += currentTag.Render("  • current")
 		}
 
 		lines = append(lines, style.Render(prefix+label))
@@ -402,11 +403,11 @@ func (m *appModel) reload() error {
 	if err := os.MkdirAll(m.profileDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create profile directory: %w", err)
 	}
-	if err := migrateLegacyProfiles(m.legacyProfileDir, m.profileDir); err != nil {
-		return err
+	if err := os.MkdirAll(m.legacyProfileDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create legacy profile directory: %w", err)
 	}
 
-	profiles, err := listProfiles(m.profileDir)
+	profiles, err := listProfiles(m.profileDir, m.legacyProfileDir)
 	if err != nil {
 		return err
 	}
@@ -424,7 +425,7 @@ func (m *appModel) reload() error {
 		return nil
 	}
 
-	cur, err := currentProfile(m.authFile, m.profileDir, m.profiles)
+	cur, err := currentProfile(m.authFile, []string{m.profileDir, m.legacyProfileDir}, m.profiles)
 	if err != nil && !errors.Is(err, errNoMatchingProfile) {
 		return err
 	}
@@ -475,48 +476,72 @@ func (m *appModel) exitConfirm() appModel {
 
 var errNoMatchingProfile = errors.New("no matching saved profile")
 
-func listProfiles(profileDir string) ([]string, error) {
-	entries, err := os.ReadDir(profileDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read profile directory: %w", err)
-	}
-
+func listProfiles(dirs ...string) ([]string, error) {
+	seen := make(map[string]struct{})
 	var profiles []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read profile directory: %w", err)
 		}
-		name := entry.Name()
-		if !isProfileFilename(name) {
-			continue
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !isProfileFilename(name) {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			profiles = append(profiles, name)
 		}
-		profiles = append(profiles, name)
 	}
 
 	sort.Strings(profiles)
 	return profiles, nil
 }
 
-func currentProfile(authFile, profileDir string, profiles []string) (string, error) {
+func currentProfile(authFile string, profileDirs []string, profiles []string) (string, error) {
 	for _, name := range profiles {
-		ok, err := filesEqual(authFile, filepath.Join(profileDir, name))
-		if err != nil {
-			return "", err
-		}
-		if ok {
-			return name, nil
+		for _, dir := range profileDirs {
+			path := filepath.Join(dir, name)
+			if !fileExists(path) {
+				continue
+			}
+			ok, err := filesEqual(authFile, path)
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				return name, nil
+			}
 		}
 	}
 	return "", errNoMatchingProfile
 }
 
-func activateProfile(authFile, profileDir, name string) error {
+func activateProfile(authFile string, profileDirs []string, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("missing profile name")
 	}
 
-	src := filepath.Join(profileDir, name)
-	if !fileExists(src) {
+	var src string
+	for _, dir := range profileDirs {
+		candidate := filepath.Join(dir, name)
+		if fileExists(candidate) {
+			src = candidate
+			break
+		}
+	}
+	if src == "" {
 		return fmt.Errorf("profile %q not found", name)
 	}
 
@@ -691,77 +716,14 @@ func isValidProfileName(name string) bool {
 }
 
 func isProfileFilename(name string) bool {
-	if !isValidProfileName(name) {
+	lower := strings.ToLower(name)
+	if strings.HasSuffix(lower, ".tmp") || strings.Contains(lower, ".tmp-") {
 		return false
 	}
-	return !strings.Contains(name, ".tmp-")
-}
-
-func migrateLegacyProfiles(legacyDir, profileDir string) error {
-	entries, err := os.ReadDir(legacyDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("failed to read legacy profile directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if !isProfileFilename(name) {
-			continue
-		}
-
-		src := filepath.Join(legacyDir, name)
-		dst := filepath.Join(profileDir, name)
-
-		if samePath(src, dst) || fileExists(dst) {
-			continue
-		}
-		if !isLikelyAuthProfile(src) {
-			continue
-		}
-
-		if err := moveFile(src, dst); err != nil {
-			return fmt.Errorf("failed to migrate profile %q: %w", name, err)
-		}
-	}
-
-	return nil
-}
-
-func isLikelyAuthProfile(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	if strings.HasPrefix(name, ".") {
 		return false
 	}
-	return len(data) > 0 && json.Valid(data)
-}
-
-func moveFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	if err := copyFile(src, dst); err != nil {
-		return err
-	}
-	if err := os.Remove(src); err != nil {
-		return err
-	}
-	return nil
-}
-
-func samePath(a, b string) bool {
-	aa := filepath.Clean(a)
-	bb := filepath.Clean(b)
-	return strings.EqualFold(aa, bb)
+	return true
 }
 
 func isPrintableRune(r rune) bool {
@@ -778,26 +740,42 @@ func indexOf(xs []string, target string) int {
 }
 
 var (
+	accentColor    = lipgloss.Color("#8B5CF6")
+	accentSoft     = lipgloss.Color("#C4B5FD")
+	successColor   = lipgloss.Color("#10B981")
+	errorColor     = lipgloss.Color("#F87171")
+	mutedColor     = lipgloss.Color("#94A3B8")
+	panelBorder    = lipgloss.Color("#A78BFA")
+	selectedGlow   = lipgloss.Color("#DDD6FE")
+	headerTitle    = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
+	headerValue    = lipgloss.NewStyle().Bold(true).Foreground(accentSoft)
+	currentTag     = lipgloss.NewStyle().Foreground(successColor).Bold(true)
 	baseStyle = lipgloss.NewStyle().
 			Padding(1, 2)
 
 	panelStyle = lipgloss.NewStyle().
+			BorderForeground(panelBorder).
 			Border(lipgloss.RoundedBorder()).
 			Padding(1, 2)
 
 	itemStyle = lipgloss.NewStyle()
 
 	selectedItemStyle = lipgloss.NewStyle().
-				Bold(true)
+				Bold(true).
+				Foreground(selectedGlow)
 
 	footerStyle = lipgloss.NewStyle().
-			Faint(true)
+			Foreground(mutedColor)
 
-	statusStyle = lipgloss.NewStyle()
-
-	errorStyle = lipgloss.NewStyle().
+	statusStyle = lipgloss.NewStyle().
+			Foreground(successColor).
 			Bold(true)
 
+	errorStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(errorColor)
+
 	emptyStyle = lipgloss.NewStyle().
-			Faint(true)
+			Foreground(mutedColor).
+			Italic(true)
 )
