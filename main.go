@@ -168,46 +168,28 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No profiles to rename.")
 			return m, nil
 		}
-		m.mode = modeInput
-		m.pendingAction = actionRename
-		m.inputValue = m.selectedProfile()
-		m.inputPrompt = fmt.Sprintf("Rename profile %q to:", m.selectedProfile())
-		m.clearMessages()
-		return m, nil
+		return m.enterInput(actionRename, fmt.Sprintf("Rename profile %q to:", m.selectedProfile()), m.selectedProfile()), nil
 
 	case "s":
 		if !m.authActive {
 			m.setError("No active auth.json to save.")
 			return m, nil
 		}
-		m.mode = modeInput
-		m.pendingAction = actionSave
-		m.inputValue = ""
-		m.inputPrompt = "Save current auth as profile:"
-		m.clearMessages()
-		return m, nil
+		return m.enterInput(actionSave, "Save current auth as profile:", ""), nil
 
 	case "d":
 		if len(m.profiles) == 0 {
 			m.setError("No profiles to delete.")
 			return m, nil
 		}
-		m.mode = modeConfirm
-		m.pendingAction = actionDelete
-		m.confirmPrompt = fmt.Sprintf("Delete profile %q? [y/N]", m.selectedProfile())
-		m.clearMessages()
-		return m, nil
+		return m.enterConfirm(actionDelete, fmt.Sprintf("Delete profile %q? [y/N]", m.selectedProfile())), nil
 
 	case "l":
 		if !m.authActive {
 			m.setError("Already logged out.")
 			return m, nil
 		}
-		m.mode = modeConfirm
-		m.pendingAction = actionLogout
-		m.confirmPrompt = "Remove current auth.json and log out? [y/N]"
-		m.clearMessages()
-		return m, nil
+		return m.enterConfirm(actionLogout, "Remove current auth.json and log out? [y/N]"), nil
 
 	case "enter":
 		if len(m.profiles) == 0 {
@@ -215,28 +197,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := m.selectedProfile()
-		if err := m.syncTrackedProfile(); err != nil {
-			m.setError(err.Error())
-			return m, nil
-		}
-		if err := activateProfile(m.authFile, []string{m.profileDir, m.legacyProfileDir}, name); err != nil {
-			m.setError(err.Error())
-			return m, nil
-		}
-		marker, err := markerForProfile(m.profileDir, name)
-		if err != nil {
-			m.currentProfile = ""
-			_ = clearCurrentProfileMarker(m.currentProfileFile)
-			m.setError(err.Error())
-			return m, nil
-		}
-		if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-			m.currentProfile = ""
-			_ = clearCurrentProfileMarker(m.currentProfileFile)
-			m.setError(fmt.Sprintf("activated profile %q, but failed to track it: %v", name, err))
-			return m, nil
-		}
-		if err := m.reload(); err != nil {
+		if err := m.activateSelectedProfile(name); err != nil {
 			m.setError(err.Error())
 			return m, nil
 		}
@@ -262,12 +223,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.mode = modeNormal
-		m.pendingAction = actionNone
-		m.inputPrompt = ""
-		m.inputValue = ""
-		m.setStatus("Cancelled.")
-		return m, nil
+		return m.cancelMode(), nil
 
 	case "enter":
 		value := strings.TrimSpace(m.inputValue)
@@ -275,69 +231,49 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case actionSave:
 			if err := saveCurrentAuth(m.authFile, m.profileDir, value); err != nil {
 				m.setError(err.Error())
-				return m.exitInput(), nil
+				return m.exitMode(), nil
 			}
 			marker, err := markerForProfile(m.profileDir, value)
 			if err != nil {
-				if reloadErr := m.reload(); reloadErr != nil {
-					m.setError(reloadErr.Error())
-				} else {
-					m.setError(err.Error())
-				}
-				return m.exitInput(), nil
+				return m.reloadAndExitWithError(err), nil
 			}
 			if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-				if reloadErr := m.reload(); reloadErr != nil {
-					m.setError(reloadErr.Error())
-				} else {
-					m.setError(err.Error())
-				}
-				return m.exitInput(), nil
+				return m.reloadAndExitWithError(err), nil
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
-				return m.exitInput(), nil
+				return m.exitMode(), nil
 			}
 			m.setStatus(fmt.Sprintf("Saved current auth as %q.", value))
-			return m.exitInput(), nil
+			return m.exitMode(), nil
 
 		case actionRename:
 			oldName := m.selectedProfile()
 			if err := renameProfile(m.profileDir, oldName, value); err != nil {
 				m.setError(err.Error())
-				return m.exitInput(), nil
+				return m.exitMode(), nil
 			}
 			if m.currentProfile == oldName {
 				marker, err := markerForProfile(m.profileDir, value)
 				if err != nil {
-					if reloadErr := m.reload(); reloadErr != nil {
-						m.setError(reloadErr.Error())
-					} else {
-						m.setError(err.Error())
-					}
-					return m.exitInput(), nil
+					return m.reloadAndExitWithError(err), nil
 				}
 				if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-					if reloadErr := m.reload(); reloadErr != nil {
-						m.setError(reloadErr.Error())
-					} else {
-						m.setError(err.Error())
-					}
-					return m.exitInput(), nil
+					return m.reloadAndExitWithError(err), nil
 				}
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
-				return m.exitInput(), nil
+				return m.exitMode(), nil
 			}
 			m.cursor = indexOf(m.profiles, value)
 			if m.cursor < 0 {
 				m.cursor = 0
 			}
 			m.setStatus(fmt.Sprintf("Renamed %q to %q.", oldName, value))
-			return m.exitInput(), nil
+			return m.exitMode(), nil
 		}
-		return m.exitInput(), nil
+		return m.exitMode(), nil
 
 	case "backspace":
 		runes := []rune(m.inputValue)
@@ -359,11 +295,7 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
 	case "esc", "n", "enter":
-		m.mode = modeNormal
-		m.pendingAction = actionNone
-		m.confirmPrompt = ""
-		m.setStatus("Cancelled.")
-		return m, nil
+		return m.cancelMode(), nil
 
 	case "y":
 		switch m.pendingAction {
@@ -371,7 +303,7 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			name := m.selectedProfile()
 			if err := deleteProfile(m.profileDir, name); err != nil {
 				m.setError(err.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			var markerErr error
 			if m.currentProfile == name {
@@ -379,38 +311,38 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			if m.cursor >= len(m.profiles) && m.cursor > 0 {
 				m.cursor--
 			}
 			if markerErr != nil {
 				m.setError(markerErr.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			m.setStatus(fmt.Sprintf("Deleted profile %q.", name))
-			return m.exitConfirm(), nil
+			return m.exitMode(), nil
 
 		case actionLogout:
 			if err := m.syncTrackedProfile(); err != nil {
 				m.setError(err.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			if err := logoutAuth(m.authFile); err != nil {
 				m.setError(err.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			markerErr := clearCurrentProfileMarker(m.currentProfileFile)
 			if err := m.reload(); err != nil {
 				m.setError(err.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			if markerErr != nil {
 				m.setError(markerErr.Error())
-				return m.exitConfirm(), nil
+				return m.exitMode(), nil
 			}
 			m.setStatus("Logged out.")
-			return m.exitConfirm(), nil
+			return m.exitMode(), nil
 		}
 	}
 
@@ -553,11 +485,7 @@ func (m *appModel) reload() error {
 	if err != nil {
 		return err
 	}
-	if marker.Name == "" {
-		m.currentProfile = ""
-	} else {
-		m.currentProfile = marker.Name
-	}
+	m.currentProfile = marker.Name
 
 	return nil
 }
@@ -574,6 +502,29 @@ func (m *appModel) syncTrackedProfile() error {
 		return nil
 	}
 	return syncProfileFromAuth(m.authFile, m.profileDir, marker)
+}
+
+func (m *appModel) activateSelectedProfile(name string) error {
+	if err := m.syncTrackedProfile(); err != nil {
+		return err
+	}
+	if err := activateProfile(m.authFile, []string{m.profileDir, m.legacyProfileDir}, name); err != nil {
+		return err
+	}
+
+	marker, err := markerForProfile(m.profileDir, name)
+	if err != nil {
+		m.currentProfile = ""
+		_ = clearCurrentProfileMarker(m.currentProfileFile)
+		return err
+	}
+	if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
+		m.currentProfile = ""
+		_ = clearCurrentProfileMarker(m.currentProfileFile)
+		return fmt.Errorf("activated profile %q, but failed to track it: %v", name, err)
+	}
+
+	return m.reload()
 }
 
 func (m *appModel) selectedProfile() string {
@@ -597,19 +548,52 @@ func (m *appModel) clearMessages() {
 	m.errText = ""
 }
 
-func (m *appModel) exitInput() appModel {
+func (m *appModel) enterInput(nextAction action, prompt, value string) appModel {
+	m.mode = modeInput
+	m.pendingAction = nextAction
+	m.inputPrompt = prompt
+	m.inputValue = value
+	m.confirmPrompt = ""
+	m.clearMessages()
+	return *m
+}
+
+func (m *appModel) enterConfirm(nextAction action, prompt string) appModel {
+	m.mode = modeConfirm
+	m.pendingAction = nextAction
+	m.confirmPrompt = prompt
+	m.inputPrompt = ""
+	m.inputValue = ""
+	m.clearMessages()
+	return *m
+}
+
+func (m *appModel) cancelMode() appModel {
 	m.mode = modeNormal
 	m.pendingAction = actionNone
 	m.inputPrompt = ""
 	m.inputValue = ""
+	m.confirmPrompt = ""
+	m.setStatus("Cancelled.")
 	return *m
 }
 
-func (m *appModel) exitConfirm() appModel {
+func (m *appModel) exitMode() appModel {
 	m.mode = modeNormal
 	m.pendingAction = actionNone
+	m.inputPrompt = ""
+	m.inputValue = ""
 	m.confirmPrompt = ""
 	return *m
+}
+
+func (m *appModel) reloadAndExitWithError(err error) appModel {
+	if reloadErr := m.reload(); reloadErr != nil {
+		m.setError(reloadErr.Error())
+	} else {
+		m.setError(err.Error())
+	}
+	return m.exitMode()
 }
 
 var errNoMatchingProfile = errors.New("no matching saved profile")
@@ -656,38 +640,23 @@ func currentProfile(authFile string, profileDirs []string, profiles []string) (s
 		return "", nil
 	}
 
-	for _, name := range profiles {
-		for _, dir := range profileDirs {
-			path := filepath.Join(dir, name)
-			if !fileExists(path) {
-				continue
-			}
-			same, err := filesEqual(authFile, path)
-			if err != nil {
-				return "", err
-			}
-			if same {
-				return name, nil
-			}
-		}
+	name, err := findMatchingProfile(profileDirs, profiles, func(path string) (bool, error) {
+		return filesEqual(authFile, path)
+	})
+	if err == nil {
+		return name, nil
+	}
+	if !errors.Is(err, errNoMatchingProfile) {
+		return "", err
 	}
 
-	for _, name := range profiles {
-		for _, dir := range profileDirs {
-			path := filepath.Join(dir, name)
-			if !fileExists(path) {
-				continue
-			}
-			profileIdentity, err := readAuthIdentity(path)
-			if err != nil {
-				continue
-			}
-			if profileIdentity.matches(authIdentity) {
-				return name, nil
-			}
+	return findMatchingProfile(profileDirs, profiles, func(path string) (bool, error) {
+		profileIdentity, err := readAuthIdentity(path)
+		if err != nil {
+			return false, nil
 		}
-	}
-	return "", errNoMatchingProfile
+		return profileIdentity.matches(authIdentity), nil
+	})
 }
 
 func activateProfile(authFile string, profileDirs []string, name string) error {
@@ -1135,6 +1104,26 @@ func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func findMatchingProfile(profileDirs, profiles []string, match func(path string) (bool, error)) (string, error) {
+	for _, name := range profiles {
+		for _, dir := range profileDirs {
+			path := filepath.Join(dir, name)
+			if !fileExists(path) {
+				continue
+			}
+			ok, err := match(path)
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				return name, nil
+			}
+		}
+	}
+
+	return "", errNoMatchingProfile
 }
 
 func findProfilePath(dirs []string, name string) (string, bool) {
