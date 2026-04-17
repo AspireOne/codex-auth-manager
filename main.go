@@ -279,11 +279,19 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			marker, err := markerForProfile(m.profileDir, value)
 			if err != nil {
-				m.setError(err.Error())
+				if reloadErr := m.reload(); reloadErr != nil {
+					m.setError(reloadErr.Error())
+				} else {
+					m.setError(err.Error())
+				}
 				return m.exitInput(), nil
 			}
 			if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-				m.setError(err.Error())
+				if reloadErr := m.reload(); reloadErr != nil {
+					m.setError(reloadErr.Error())
+				} else {
+					m.setError(err.Error())
+				}
 				return m.exitInput(), nil
 			}
 			if err := m.reload(); err != nil {
@@ -302,11 +310,19 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.currentProfile == oldName {
 				marker, err := markerForProfile(m.profileDir, value)
 				if err != nil {
-					m.setError(err.Error())
+					if reloadErr := m.reload(); reloadErr != nil {
+						m.setError(reloadErr.Error())
+					} else {
+						m.setError(err.Error())
+					}
 					return m.exitInput(), nil
 				}
 				if err := writeCurrentProfileMarker(m.currentProfileFile, marker); err != nil {
-					m.setError(err.Error())
+					if reloadErr := m.reload(); reloadErr != nil {
+						m.setError(reloadErr.Error())
+					} else {
+						m.setError(err.Error())
+					}
 					return m.exitInput(), nil
 				}
 			}
@@ -547,7 +563,7 @@ func (m *appModel) reload() error {
 }
 
 func (m *appModel) syncTrackedProfile() error {
-	if !m.authActive || m.currentProfile == "" {
+	if !m.authActive {
 		return nil
 	}
 	marker, err := resolveCurrentProfileMarker(m.authFile, m.currentProfileFile, m.profileDir, m.profiles)
@@ -635,17 +651,38 @@ func listProfiles(dirs ...string) ([]string, error) {
 }
 
 func currentProfile(authFile string, profileDirs []string, profiles []string) (string, error) {
+	authIdentity, err := readAuthIdentity(authFile)
+	if err != nil {
+		return "", nil
+	}
+
 	for _, name := range profiles {
 		for _, dir := range profileDirs {
 			path := filepath.Join(dir, name)
 			if !fileExists(path) {
 				continue
 			}
-			ok, err := filesEqual(authFile, path)
+			same, err := filesEqual(authFile, path)
 			if err != nil {
 				return "", err
 			}
-			if ok {
+			if same {
+				return name, nil
+			}
+		}
+	}
+
+	for _, name := range profiles {
+		for _, dir := range profileDirs {
+			path := filepath.Join(dir, name)
+			if !fileExists(path) {
+				continue
+			}
+			profileIdentity, err := readAuthIdentity(path)
+			if err != nil {
+				continue
+			}
+			if profileIdentity.matches(authIdentity) {
 				return name, nil
 			}
 		}
