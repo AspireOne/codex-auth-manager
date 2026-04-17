@@ -1,12 +1,46 @@
 package profiles
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *testing.T) {
+	m, paths := newTestManager(t)
+	profileName := "restored"
+	profilePath := filepath.Join(paths.profileDir, profileName)
+	writeAuthFile(t, profilePath, authFixture("account-activate", "api-activate"))
+	assertFileMissing(t, paths.authFile)
+
+	if err := m.Activate(profileName); err != nil {
+		t.Fatalf("Activate(%q) error = %v", profileName, err)
+	}
+
+	assertFileExists(t, paths.authFile)
+	profileData, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", profilePath, err)
+	}
+	authData, err := os.ReadFile(paths.authFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", paths.authFile, err)
+	}
+	if !bytes.Equal(authData, profileData) {
+		t.Fatalf("activated auth.json content = %q, want %q", authData, profileData)
+	}
+
+	marker, err := readCurrentProfileMarker(paths.markerFile, paths.profileDir)
+	if err != nil {
+		t.Fatalf("readCurrentProfileMarker() error = %v", err)
+	}
+	if marker.Name != profileName {
+		t.Fatalf("current profile marker name = %q, want %q", marker.Name, profileName)
+	}
+}
 
 func TestManagerSaveCurrentReturnsErrStateChangedAfterProfileIsSaved(t *testing.T) {
 	m, paths := newTestManager(t)
@@ -19,6 +53,23 @@ func TestManagerSaveCurrentReturnsErrStateChangedAfterProfileIsSaved(t *testing.
 	}
 
 	assertFileExists(t, filepath.Join(paths.profileDir, "saved"))
+}
+
+func TestManagerSaveCurrentRejectsDuplicateCredentialsUnderNewName(t *testing.T) {
+	m, paths := newTestManager(t)
+	auth := authFixture("account-duplicate", "api-duplicate")
+	writeAuthFile(t, paths.authFile, auth)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "existing"), auth)
+
+	err := m.SaveCurrent("new-name")
+	if err == nil {
+		t.Fatal("SaveCurrent error = nil, want duplicate credentials error")
+	}
+	if want := `same auth already exists as profile "existing"`; err.Error() != want {
+		t.Fatalf("SaveCurrent error = %q, want %q", err.Error(), want)
+	}
+
+	assertFileMissing(t, filepath.Join(paths.profileDir, "new-name"))
 }
 
 func TestManagerRenameReturnsErrStateChangedAfterProfileIsRenamed(t *testing.T) {
@@ -67,6 +118,75 @@ func TestManagerLogoutReturnsErrStateChangedAfterAuthIsRemoved(t *testing.T) {
 	assertFileMissing(t, paths.authFile)
 }
 
+func TestManagerSyncTrackedProfileDoesNotOverwriteProfileWhenAuthIdentityNoLongerMatchesMarker(t *testing.T) {
+	m, paths := newTestManager(t)
+	profilePath := filepath.Join(paths.profileDir, "profile-a")
+	profileA := authFixture("account-a", "api-a")
+	writeAuthFile(t, profilePath, profileA)
+	writeMarkerFile(t, paths.markerFile, currentProfileMarker{
+		Name:     "profile-a",
+		Identity: authIdentity{AuthMode: "account", AccountID: "account-a"},
+	})
+	writeAuthFile(t, paths.authFile, authFixture("account-b", "api-b"))
+
+	want, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", profilePath, err)
+	}
+
+	if err := m.SyncTrackedProfile(); err != nil {
+		t.Fatalf("SyncTrackedProfile() error = %v", err)
+	}
+
+	got, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", profilePath, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("profile content changed after SyncTrackedProfile()\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+func TestManagerSyncTrackedProfileCopiesChangedAuthWhenIdentityStillMatches(t *testing.T) {
+	m, paths := newTestManager(t)
+	profileName := "work"
+	profilePath := filepath.Join(paths.profileDir, profileName)
+
+	savedAuth := realisticAuthFixture("acct_same_identity", "session-original", "refresh-original", "https://chatgpt.com/backend-api")
+	updatedAuth := realisticAuthFixture("acct_same_identity", "session-updated", "refresh-updated", "https://chatgpt.com/backend-api")
+	updatedAuth["last_refresh_at"] = "2026-04-17T12:34:56Z"
+	updatedAuth["extra"] = map[string]any{
+		"workspace": "codex-manage",
+	}
+
+	writeAuthFile(t, profilePath, savedAuth)
+	writeAuthFile(t, paths.authFile, updatedAuth)
+	writeMarkerFile(t, paths.markerFile, currentProfileMarker{
+		Name: profileName,
+		Identity: authIdentity{
+			AuthMode:  "account",
+			AccountID: "acct_same_identity",
+		},
+	})
+
+	if err := m.SyncTrackedProfile(); err != nil {
+		t.Fatalf("SyncTrackedProfile() error = %v", err)
+	}
+
+	assertFilesEqual(t, profilePath, paths.authFile)
+
+	marker, err := readCurrentProfileMarker(paths.markerFile, paths.profileDir)
+	if err != nil {
+		t.Fatalf("readCurrentProfileMarker() error = %v", err)
+	}
+	if marker.Name != profileName {
+		t.Fatalf("marker.Name = %q, want %q", marker.Name, profileName)
+	}
+	if !marker.Identity.matches(authIdentity{AuthMode: "account", AccountID: "acct_same_identity"}) {
+		t.Fatalf("marker.Identity = %#v, want matching account identity", marker.Identity)
+	}
+}
+
 func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
 	codexDir := t.TempDir()
 	m := NewManager(codexDir)
@@ -84,6 +204,99 @@ func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
 	}
 	assertDirExists(t, filepath.Join(codexDir, "auth_manager"))
 	assertDirExists(t, filepath.Join(codexDir, "auth_manager", "profiles"))
+}
+
+func TestManagerSnapshotMigratesLegacyProfile(t *testing.T) {
+	m, paths := newTestManager(t)
+	const profileName = "work-account"
+	legacyProfile := filepath.Join(paths.legacyDir, profileName)
+	migratedProfile := filepath.Join(paths.profileDir, profileName)
+	writeAuthFile(t, legacyProfile, realisticAuthFixture(
+		"acct_legacy_work",
+		"session-legacy-work",
+		"refresh-legacy-work",
+		"https://chatgpt.com/backend-api",
+	))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	assertFileMissing(t, legacyProfile)
+	assertFileExists(t, migratedProfile)
+	assertProfiles(t, snapshot.Profiles, []string{profileName})
+}
+
+func TestManagerSnapshotIgnoresStaleCurrentProfileMarker(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, paths.authFile, authFixture("account-active", "api-active"))
+	writeMarkerFile(t, paths.markerFile, currentProfileMarker{
+		Name:     "deleted-profile",
+		Identity: authIdentity{AuthMode: "account", AccountID: "account-active"},
+	})
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	if !snapshot.AuthActive {
+		t.Fatalf("Snapshot().AuthActive = false, want true")
+	}
+	if snapshot.CurrentProfile != "" {
+		t.Fatalf("Snapshot().CurrentProfile = %q, want empty", snapshot.CurrentProfile)
+	}
+}
+
+func TestManagerSnapshotIgnoresInvalidProfileFiles(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "valid"), authFixture("account-valid", "api-valid"))
+	if err := os.WriteFile(filepath.Join(paths.profileDir, "corrupt"), []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile corrupt profile: %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	assertProfiles(t, snapshot.Profiles, []string{"valid"})
+}
+
+func TestManagerSnapshotMigratesLegacyConflictKeepingBothProfiles(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.legacyDir, "foo"), authFixture("legacy-account", "legacy-api"))
+	writeAuthFile(t, filepath.Join(paths.profileDir, "foo"), authFixture("profiles-account", "profiles-api"))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	assertFileExists(t, filepath.Join(paths.profileDir, "foo"))
+	assertFileExists(t, filepath.Join(paths.profileDir, "foo-legacy"))
+	assertFileMissing(t, filepath.Join(paths.legacyDir, "foo"))
+	assertProfiles(t, snapshot.Profiles, []string{"foo", "foo-legacy"})
+
+	profilesIdentity, err := readAuthIdentity(filepath.Join(paths.profileDir, "foo"))
+	if err != nil {
+		t.Fatalf("readAuthIdentity(profiles/foo): %v", err)
+	}
+	if profilesIdentity.AccountID != "profiles-account" {
+		t.Fatalf("profiles/foo account ID = %q, want profiles-account", profilesIdentity.AccountID)
+	}
+
+	legacyIdentity, err := readAuthIdentity(filepath.Join(paths.profileDir, "foo-legacy"))
+	if err != nil {
+		t.Fatalf("readAuthIdentity(profiles/foo-legacy): %v", err)
+	}
+	if legacyIdentity.AccountID != "legacy-account" {
+		t.Fatalf("profiles/foo-legacy account ID = %q, want legacy-account", legacyIdentity.AccountID)
+	}
+	if profilesIdentity.matches(legacyIdentity) || legacyIdentity.matches(profilesIdentity) {
+		t.Fatalf("migrated identities match, want distinct identities: profiles/foo=%#v profiles/foo-legacy=%#v", profilesIdentity, legacyIdentity)
+	}
 }
 
 type testManagerPaths struct {
@@ -128,6 +341,21 @@ func authFixture(accountID, apiKey string) map[string]any {
 	}
 }
 
+func realisticAuthFixture(accountID, accessToken, refreshToken, apiURL string) map[string]any {
+	return map[string]any{
+		"auth_mode": "account",
+		"tokens": map[string]any{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"account_id":    accountID,
+			"expires_at":    "2026-04-17T13:34:56Z",
+		},
+		"client": map[string]any{
+			"api_url": apiURL,
+		},
+	}
+}
+
 func writeAuthFile(t *testing.T, path string, body map[string]any) {
 	t.Helper()
 
@@ -140,6 +368,22 @@ func writeAuthFile(t *testing.T, path string, body map[string]any) {
 	}
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func assertFilesEqual(t *testing.T, gotPath, wantPath string) {
+	t.Helper()
+
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", gotPath, err)
+	}
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", wantPath, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%q content = %s, want contents of %q: %s", gotPath, got, wantPath, want)
 	}
 }
 
@@ -199,5 +443,18 @@ func assertDirExists(t *testing.T, path string) {
 	}
 	if !info.IsDir() {
 		t.Fatalf("%q is a file, want directory", path)
+	}
+}
+
+func assertProfiles(t *testing.T, got, want []string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("profiles = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("profiles = %#v, want %#v", got, want)
+		}
 	}
 }
