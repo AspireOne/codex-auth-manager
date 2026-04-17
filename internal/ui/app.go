@@ -46,6 +46,7 @@ type appModel struct {
 	confirmPrompt string
 	status        string
 	errText       string
+	restartRequired bool
 
 	quitting bool
 }

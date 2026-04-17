@@ -91,6 +91,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setStatus(fmt.Sprintf("Activated profile %q.", name))
+		m.restartRequired = true
 		return m, nil
 
 	case "F5", "ctrl+r":
@@ -193,6 +194,7 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m.exitMode(), nil
 			}
 			m.setStatus("Logged out.")
+			m.restartRequired = true
 			return m.exitMode(), nil
 		}
 	}

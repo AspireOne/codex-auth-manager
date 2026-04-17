@@ -108,5 +108,9 @@ func (m appModel) renderStatus() string {
 	if m.errText != "" {
 		return errorStyle.Render("Error: " + m.errText)
 	}
-	return statusStyle.Render(m.status)
+	s := statusStyle.Render(m.status)
+	if m.restartRequired {
+		s += lipgloss.NewStyle().Foreground(mutedColor).Render(" (Restart Codex to apply)")
+	}
+	return s
 }
