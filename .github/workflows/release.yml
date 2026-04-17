@@ -22,6 +22,7 @@ on:
         type: boolean
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -262,3 +263,15 @@ jobs:
           fi
 
           gh release create "${args[@]}"
+
+      - name: Update package managers
+        if: steps.meta.outputs.prerelease != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run "Update Homebrew Tap" -f version="$VERSION"
+          gh workflow run "Update Scoop Bucket" -f version="$VERSION"

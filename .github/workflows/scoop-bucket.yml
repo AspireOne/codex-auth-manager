@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   update-bucket:
-    if: vars.SCOOP_BUCKET_REPO != ''
+    if: vars.SCOOP_BUCKET_REPO != '' && (github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false)
     runs-on: ubuntu-latest
 
     steps:
@@ -117,6 +117,7 @@ jobs:
             "version": "${VERSION_TRIMMED}",
             "description": "Terminal UI for switching between Codex auth profiles",
             "homepage": "https://github.com/${GITHUB_REPOSITORY}",
+            "license": "GPL-3.0-only",
             "architecture": {
               "64bit": {
                 "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${VERSION}/${AMD64_ASSET}",

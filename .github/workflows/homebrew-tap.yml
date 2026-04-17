@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   update-tap:
-    if: vars.HOMEBREW_TAP_REPO != ''
+    if: vars.HOMEBREW_TAP_REPO != '' && (github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false)
     runs-on: ubuntu-latest
 
     steps:
