@@ -19,6 +19,10 @@ Set WaitTimeout 60s
 
 Env HOME ".vhs-demo-home"
 Env USERPROFILE ".vhs-demo-home"
+Env NO_COLOR ""
+Env CLICOLOR_FORCE "1"
+Env TERM "xterm-256color"
+Env COLORTERM "truecolor"
 
 Hide
 Type "bash docs/demo-setup.sh"
