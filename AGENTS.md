@@ -1,6 +1,6 @@
-# Gemini Context: codex-manage
+# Agent Context: codex-manage
 
-This document provides essential context for Gemini when working on the `codex-manage` project.
+This document provides essential context for agents working on the `codex-manage` project.
 
 ## Project Overview
 `codex-manage` is a Go-based terminal user interface (TUI) designed to manage multiple Codex authentication profiles. It allows users to quickly switch between different Codex accounts by swapping the `~/.codex/auth.json` file with saved versions.
@@ -29,11 +29,14 @@ The project follows a standard Go directory structure:
 ## Building and Running
 
 ### Build
-To build the project for Linux (amd64):
+To build the project for the current host platform:
 ```sh
 make build
 ```
-The binary will be placed in the `dist/` directory.
+The binary will be placed in the `dist/` directory. To cross-compile, set `GOOS` and `GOARCH`, for example:
+```sh
+GOOS=linux GOARCH=amd64 make build
+```
 
 ### Run
 To run the application:
@@ -48,9 +51,9 @@ go test ./...
 ```
 
 ### Release
-To create a new release (requires PowerShell):
-```powershell
-./release.ps1 vX.Y.Z
+To create a new release:
+```sh
+go run scripts/release.go vX.Y.Z
 ```
 
 ## Development Conventions
@@ -69,4 +72,4 @@ To create a new release (requires PowerShell):
 - `internal/ui/view.go`: Defines the layout and rendering logic for the TUI.
 - `internal/ui/update.go`: Handles input events and state transitions.
 - `Makefile`: Defines the build process.
-- `release.ps1`: Automates the tagging and release process.
+- `scripts/release.go`: Automates the tagging and release process.
