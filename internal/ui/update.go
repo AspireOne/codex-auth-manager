@@ -69,6 +69,18 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No active auth.json to save.")
 			return m, nil
 		}
+		if m.currentProfile != "" {
+			if err := m.syncTrackedProfile(); err != nil {
+				m.setError(err.Error())
+				return m, nil
+			}
+			if err := m.reload(); err != nil {
+				m.setError(err.Error())
+				return m, nil
+			}
+			m.setInfo(fmt.Sprintf("Current auth is already saved as profile %q.", m.currentProfile))
+			return m, nil
+		}
 		return m.enterInput(actionSave, "Save current auth as profile:", ""), nil
 
 	case "d":

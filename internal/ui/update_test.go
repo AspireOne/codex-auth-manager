@@ -240,6 +240,58 @@ func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	}
 }
 
+func TestSavingCurrentProfileShowsInfoAndSyncsTrackedProfile(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	authPath := filepath.Join(codexDir, "auth.json")
+	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
+	profilePath := filepath.Join(profileDir, testWorkProfileName)
+	auth := []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"},\"updated\":true}\n")
+	profile := []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"},\"updated\":false}\n")
+
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(authPath, auth, 0o600); err != nil {
+		t.Fatalf("WriteFile auth: %v", err)
+	}
+	if err := os.WriteFile(profilePath, profile, 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if m.currentProfile != testWorkProfileName {
+		t.Fatalf("currentProfile = %q, want %q", m.currentProfile, testWorkProfileName)
+	}
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "s"}))
+	got := updatedModel.(appModel)
+
+	if got.mode != modeNormal {
+		t.Fatalf("mode = %v, want %v", got.mode, modeNormal)
+	}
+	if got.pendingAction != actionNone {
+		t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionNone)
+	}
+	wantStatus := fmt.Sprintf("Current auth is already saved as profile %q.", testWorkProfileName)
+	if got.status != wantStatus {
+		t.Fatalf("status = %q, want already-saved message", got.status)
+	}
+	if got.statusKind != statusInfo {
+		t.Fatalf("statusKind = %v, want %v", got.statusKind, statusInfo)
+	}
+	if got.errText != "" {
+		t.Fatalf("errText = %q, want empty", got.errText)
+	}
+	gotProfile := readTestFile(t, profilePath)
+	if string(gotProfile) != string(auth) {
+		t.Fatalf("profile = %q, want synced auth", gotProfile)
+	}
+}
+
 func TestActivatingFromCustomAuthPromptsWithoutOverwritingAuth(t *testing.T) {
 	m, authPath, customAuth, _ := setupCustomAuthActivationTest(t)
 
