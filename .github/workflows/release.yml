@@ -219,6 +219,24 @@ jobs:
           - \`codex-manage_${VERSION#v}_windows_arm64.zip\`
           - \`SHA256SUMS.txt\`
 
+          ## Installation
+
+          macOS or Linux with Homebrew:
+
+              brew install AspireOne/tap/codex-manage
+
+          Windows with Scoop:
+
+              scoop bucket add AspireOne https://github.com/AspireOne/scoop-bucket
+              scoop install codex-manage
+
+          Manual install example for Linux amd64:
+
+              mkdir -p ~/.local/bin
+              tar -xzf codex-manage_${VERSION#v}_linux_amd64.tar.gz -C ~/.local/bin --strip-components=1 ./codex-manage
+
+          Use the archive that matches your platform and CPU. \`~/.local/bin\` is the usual per-user destination; make sure it is on your \`PATH\`. For a system-wide install, \`/usr/local/bin\` is the usual destination.
+
           ## Commits In This Release
 
           EOF
