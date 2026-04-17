@@ -1,0 +1,115 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing tag to publish to the Homebrew tap, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update-tap:
+    if: vars.HOMEBREW_TAP_REPO != ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$RELEASE_TAG"
+          fi
+
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like v1.0.0 or v1.0.0-rc.1"
+            exit 1
+          fi
+
+          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${VERSION}.tar.gz"
+          SHA256="$(curl -fsSL "$SOURCE_URL" | sha256sum | cut -d' ' -f1)"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_url=$SOURCE_URL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Clone tap repository
+        shell: bash
+        env:
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN secret is not configured."
+            exit 1
+          fi
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+
+      - name: Update formula
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SOURCE_URL: ${{ steps.meta.outputs.source_url }}
+          SHA256: ${{ steps.meta.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p tap/Formula
+
+          cat > tap/Formula/codex-manage.rb <<EOF
+          class CodexManage < Formula
+            desc "Terminal UI for switching between Codex auth profiles"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+            url "${SOURCE_URL}"
+            sha256 "${SHA256}"
+            version "${VERSION#v}"
+
+            depends_on "go" => :build
+
+            def install
+              ldflags = "-s -w -X main.version=#{version}"
+              system "go", "build", *std_go_args(ldflags:), "./cmd/codex-manage"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/codex-manage --version")
+            end
+          end
+          EOF
+
+      - name: Commit and push tap update
+        shell: bash
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- Formula/codex-manage.rb; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/codex-manage.rb
+          git commit -m "codex-manage ${VERSION}"
+          git push

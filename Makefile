@@ -2,7 +2,8 @@ GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 CGO_ENABLED ?= 0
 OUTPUT_DIR := dist
-LDFLAGS := -s -w
+VERSION ?= dev
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 ifeq ($(GOOS),windows)
 	BINARY := codex-manage.exe

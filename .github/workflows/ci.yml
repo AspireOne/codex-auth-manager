@@ -70,4 +70,4 @@ jobs:
           fi
 
           mkdir -p dist/ci
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "dist/ci/codex-manage-${GOOS}-${GOARCH}${ext}" ./cmd/codex-manage
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=ci" -o "dist/ci/codex-manage-${GOOS}-${GOARCH}${ext}" ./cmd/codex-manage

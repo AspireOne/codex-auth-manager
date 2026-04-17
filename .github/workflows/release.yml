@@ -142,7 +142,7 @@ jobs:
             mkdir -p "$staging_dir"
 
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-              go build -trimpath -ldflags="-s -w" -o "$staging_dir/$binary_name" ./cmd/codex-manage
+              go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "$staging_dir/$binary_name" ./cmd/codex-manage
 
             cp README.md "$staging_dir/"
 

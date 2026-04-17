@@ -37,6 +37,24 @@ go run scripts/release.go v0.1.0
 
 This script ensures your working tree is clean, runs tests, creates an annotated git tag, and pushes it to `origin`. GitHub Actions then builds release archives for Linux, macOS, and Windows, publishes a GitHub release, and includes the commits since the previous tag in the release notes.
 
+## Homebrew
+
+This repo can also update a separate Homebrew tap repository whenever a GitHub release is published.
+
+One-time setup:
+
+1. Create a tap repo on GitHub, for example `AspireOne/homebrew-tap`.
+2. In this repo, add a repository variable named `HOMEBREW_TAP_REPO` with that value.
+3. Add a repository secret named `HOMEBREW_TAP_TOKEN` containing a GitHub token that can push to the tap repo.
+
+After that, each published release updates `Formula/codex-manage.rb` in the tap automatically.
+
+Users can then install with:
+
+```sh
+brew install AspireOne/tap/codex-manage
+```
+
 ## Run
 
 ```sh
