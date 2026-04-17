@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
 	profilemgr "codex-manage/internal/profiles"
 )
 
@@ -17,7 +18,7 @@ func TestHandleActionErrorReloadsStateForErrStateChanged(t *testing.T) {
 	authPath := filepath.Join(codexDir, "auth.json")
 	profilePath := filepath.Join(codexDir, "auth_manager", "profiles", "saved")
 
-	if err := os.MkdirAll(filepath.Dir(profilePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll profile dir: %v", err)
 	}
 	if err := os.WriteFile(authPath, []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n"), 0o600); err != nil {
@@ -65,7 +66,7 @@ func TestRestartRequired(t *testing.T) {
 	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
 	profilePath := filepath.Join(profileDir, "test-profile")
 
-	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll profile dir: %v", err)
 	}
 	if err := os.WriteFile(profilePath, []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n"), 0o600); err != nil {
@@ -129,7 +130,7 @@ func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	profilePath := filepath.Join(profileDir, "work")
 	auth := []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n")
 
-	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll profile dir: %v", err)
 	}
 	if err := os.WriteFile(authPath, auth, 0o600); err != nil {
@@ -173,7 +174,7 @@ func TestInvalidProfileDiagnosticsAreRendered(t *testing.T) {
 	home := t.TempDir()
 	profileDir := filepath.Join(home, ".codex", "auth_manager", "profiles")
 
-	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll profile dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(profileDir, "corrupt"), []byte("{not json}\n"), 0o600); err != nil {

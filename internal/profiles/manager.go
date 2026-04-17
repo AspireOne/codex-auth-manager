@@ -16,6 +16,8 @@ import (
 
 const CurrentProfileMarkerName = "current-profile"
 
+const invalidJSONReason = "invalid JSON"
+
 type Snapshot struct {
 	Profiles        []string
 	InvalidProfiles []ProfileIssue
@@ -75,10 +77,10 @@ func NewManager(codexDir string) Manager {
 }
 
 func (m Manager) Snapshot() (Snapshot, error) {
-	if err := os.MkdirAll(m.ProfileDir, 0o755); err != nil {
+	if err := os.MkdirAll(m.ProfileDir, 0o700); err != nil {
 		return Snapshot{}, fmt.Errorf("failed to create profile directory: %w", err)
 	}
-	if err := os.MkdirAll(m.LegacyProfileDir, 0o755); err != nil {
+	if err := os.MkdirAll(m.LegacyProfileDir, 0o700); err != nil {
 		return Snapshot{}, fmt.Errorf("failed to create legacy profile directory: %w", err)
 	}
 	if err := migrateLegacyProfiles(m.LegacyProfileDir, m.ProfileDir); err != nil {
@@ -434,7 +436,7 @@ func readCurrentProfileMarker(path, profileDir string) (currentProfileMarker, er
 		return currentProfileMarker{}, nil
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- marker path is derived from the configured Codex directory.
 	if err != nil {
 		return currentProfileMarker{}, fmt.Errorf("failed to read current profile marker: %w", err)
 	}
@@ -503,7 +505,7 @@ func writeCurrentProfileMarker(path string, marker currentProfileMarker) error {
 	if marker.Name == "" {
 		return clearCurrentProfileMarker(path)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("failed to create marker directory: %w", err)
 	}
 	body, err := json.MarshalIndent(marker, "", "  ")
@@ -599,7 +601,7 @@ func uniqueMigratedProfileName(profileDir, name string) (string, error) {
 }
 
 func readAuthIdentity(path string) (authIdentity, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 G703 -- auth/profile paths are derived from the configured Codex directory.
 	if err != nil {
 		return authIdentity{}, fmt.Errorf("failed to read auth file %s: %w", path, err)
 	}
@@ -628,7 +630,7 @@ func readAuthIdentity(path string) (authIdentity, error) {
 func profileIssueReason(err error) string {
 	var syntaxErr *json.SyntaxError
 	if errors.As(err, &syntaxErr) {
-		return "invalid JSON"
+		return invalidJSONReason
 	}
 
 	var typeErr *json.UnmarshalTypeError
@@ -671,11 +673,11 @@ func logoutAuth(authFile string) error {
 }
 
 func filesEqual(a, b string) (bool, error) {
-	ab, err := os.ReadFile(a)
+	ab, err := os.ReadFile(a) // #nosec G304 -- compared paths come from managed profile locations.
 	if err != nil {
 		return false, fmt.Errorf("failed reading %s: %w", a, err)
 	}
-	bb, err := os.ReadFile(b)
+	bb, err := os.ReadFile(b) // #nosec G304 -- compared paths come from managed profile locations.
 	if err != nil {
 		return false, fmt.Errorf("failed reading %s: %w", b, err)
 	}
@@ -683,15 +685,17 @@ func filesEqual(a, b string) (bool, error) {
 }
 
 func copyFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
 
-	in, err := os.Open(src)
+	in, err := os.Open(src) // #nosec G304 -- source path is a managed auth/profile path.
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() {
+		_ = in.Close()
+	}()
 
 	out, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
 	if err != nil {
@@ -700,7 +704,7 @@ func copyFile(src, dst string) error {
 	tmp := out.Name()
 
 	if err := out.Chmod(0o600); err != nil {
-		out.Close()
+		_ = out.Close()
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -721,7 +725,7 @@ func copyFile(src, dst string) error {
 }
 
 func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
@@ -732,13 +736,13 @@ func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
 	tmp := out.Name()
 
 	if err := out.Chmod(perm); err != nil {
-		out.Close()
+		_ = out.Close()
 		_ = os.Remove(tmp)
 		return err
 	}
 
 	if _, err := out.Write(data); err != nil {
-		out.Close()
+		_ = out.Close()
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -751,8 +755,11 @@ func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
 }
 
 func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	info, err := os.Stat(path) // #nosec G703 -- callers pass managed application paths.
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 func findMatchingProfile(profileDirs, profiles []string, match func(path string) (bool, error)) (string, error) {

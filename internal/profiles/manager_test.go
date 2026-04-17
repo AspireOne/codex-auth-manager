@@ -21,7 +21,7 @@ func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *test
 	}
 
 	assertFileExists(t, paths.authFile)
-	profileData, err := os.ReadFile(profilePath)
+	profileData, err := os.ReadFile(profilePath) // #nosec G304 -- test fixture path is created under t.TempDir.
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", profilePath, err)
 	}
@@ -129,7 +129,7 @@ func TestManagerSyncTrackedProfileDoesNotOverwriteProfileWhenAuthIdentityNoLonge
 	})
 	writeAuthFile(t, paths.authFile, authFixture("account-b", "api-b"))
 
-	want, err := os.ReadFile(profilePath)
+	want, err := os.ReadFile(profilePath) // #nosec G304 -- test fixture path is created under t.TempDir.
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", profilePath, err)
 	}
@@ -138,7 +138,7 @@ func TestManagerSyncTrackedProfileDoesNotOverwriteProfileWhenAuthIdentityNoLonge
 		t.Fatalf("SyncTrackedProfile() error = %v", err)
 	}
 
-	got, err := os.ReadFile(profilePath)
+	got, err := os.ReadFile(profilePath) // #nosec G304 -- test fixture path is created under t.TempDir.
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", profilePath, err)
 	}
@@ -350,7 +350,7 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 	}
 
 	for _, dir := range []string{paths.profileDir, paths.legacyDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", dir, err)
 		}
 	}
@@ -395,7 +395,7 @@ func writeAuthFile(t *testing.T, path string, body map[string]any) {
 	if err != nil {
 		t.Fatalf("Marshal auth fixture: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
 	}
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
@@ -406,11 +406,11 @@ func writeAuthFile(t *testing.T, path string, body map[string]any) {
 func assertFilesEqual(t *testing.T, gotPath, wantPath string) {
 	t.Helper()
 
-	got, err := os.ReadFile(gotPath)
+	got, err := os.ReadFile(gotPath) // #nosec G304 -- test fixture path is created under t.TempDir.
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", gotPath, err)
 	}
-	want, err := os.ReadFile(wantPath)
+	want, err := os.ReadFile(wantPath) // #nosec G304 -- test fixture path is created under t.TempDir.
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", wantPath, err)
 	}
@@ -437,7 +437,7 @@ func makeBlockingDir(t *testing.T, path string) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Remove(%q): %v", path, err)
 	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", path, err)
 	}
 	blocker := filepath.Join(path, "blocker")

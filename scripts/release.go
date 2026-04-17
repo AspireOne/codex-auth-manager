@@ -118,19 +118,19 @@ func checkTagExists(version string) error {
 }
 
 func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- release script invokes fixed tool names with validated arguments.
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func runCommandQuiet(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- release script invokes fixed tool names with validated arguments.
 	return cmd.Run()
 }
 
 func runCommandWithEnv(extraEnv []string, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- release script invokes fixed tool names with validated arguments.
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if extraEnv != nil {
@@ -151,6 +151,6 @@ func runCommandWithEnv(extraEnv []string, name string, args ...string) error {
 }
 
 func getOutput(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).Output()
+	out, err := exec.Command(name, args...).Output() // #nosec G204 -- release script invokes fixed tool names with validated arguments.
 	return string(out), err
 }

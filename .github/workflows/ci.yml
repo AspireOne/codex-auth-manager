@@ -28,6 +28,24 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Lint
+        run: go tool -modfile tools.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint run
+
+      - name: NilAway
+        run: go tool -modfile tools.mod go.uber.org/nilaway/cmd/nilaway -include-pkgs="codex-manage" ./...
+
   build:
     runs-on: ubuntu-latest
     strategy:

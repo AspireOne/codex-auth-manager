@@ -88,7 +88,7 @@ func (m appModel) renderFooter() string {
 		return footerStyle.Render(fmt.Sprintf("%s %s", m.inputPrompt, m.inputValue+"█"))
 	case modeConfirm:
 		return footerStyle.Render(m.confirmPrompt)
-	default:
+	case modeNormal:
 		profileCommands := []string{
 			formatKeyHint("↑/↓", "move"),
 			formatKeyHint("enter", "activate"),
@@ -107,6 +107,8 @@ func (m appModel) renderFooter() string {
 			footerStyle.Render("UI: "+strings.Join(profileCommands, " • ")),
 			footerStyle.Render("Global: "+strings.Join(globalCommands, " • ")),
 		)
+	default:
+		return ""
 	}
 }
 

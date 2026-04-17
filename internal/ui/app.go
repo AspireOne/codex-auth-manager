@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
+
 	profilemgr "codex-manage/internal/profiles"
 )
 

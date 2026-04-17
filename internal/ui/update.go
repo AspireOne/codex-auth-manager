@@ -6,8 +6,11 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
 	profilemgr "codex-manage/internal/profiles"
 )
+
+const keyEnter = "enter"
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -18,6 +21,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		switch m.mode {
+		case modeNormal:
+			return m.updateNormal(msg)
 		case modeInput:
 			return m.updateInput(msg)
 		case modeConfirm:
@@ -80,7 +85,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.enterConfirm(actionLogout, "Remove current auth.json and log out? [y/N]"), nil
 
-	case "enter":
+	case keyEnter:
 		if len(m.profiles) == 0 {
 			m.setError("No profiles to activate.")
 			return m, nil
@@ -119,9 +124,11 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return m.cancelMode(), nil
 
-	case "enter":
+	case keyEnter:
 		value := strings.TrimSpace(m.inputValue)
 		switch m.pendingAction {
+		case actionNone, actionDelete, actionLogout:
+			return m.exitMode(), nil
 		case actionSave:
 			if err := m.profileManager.SaveCurrent(value); err != nil {
 				return m.handleActionError(err), nil
@@ -169,11 +176,13 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
-	case "esc", "n", "enter":
+	case "esc", "n", keyEnter:
 		return m.cancelMode(), nil
 
 	case "y":
 		switch m.pendingAction {
+		case actionNone, actionSave, actionRename:
+			return m.exitMode(), nil
 		case actionDelete:
 			name := m.selectedProfile()
 			if err := m.profileManager.Delete(name, m.currentProfile); err != nil {
