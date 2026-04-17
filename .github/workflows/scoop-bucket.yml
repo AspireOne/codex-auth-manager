@@ -1,0 +1,154 @@
+name: Update Scoop Bucket
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing tag to publish to the Scoop bucket, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update-bucket:
+    if: vars.SCOOP_BUCKET_REPO != ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$RELEASE_TAG"
+          fi
+
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like v1.0.0 or v1.0.0-rc.1"
+            exit 1
+          fi
+
+          VERSION_TRIMMED="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_trimmed=$VERSION_TRIMMED" >> "$GITHUB_OUTPUT"
+
+      - name: Download release checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist-scoop
+          gh release download "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS.txt \
+            --dir dist-scoop
+
+      - name: Resolve Windows asset hashes
+        id: hashes
+        shell: bash
+        env:
+          VERSION_TRIMMED: ${{ steps.meta.outputs.version_trimmed }}
+        run: |
+          set -euo pipefail
+
+          AMD64_ASSET="codex-manage_${VERSION_TRIMMED}_windows_amd64.zip"
+          ARM64_ASSET="codex-manage_${VERSION_TRIMMED}_windows_arm64.zip"
+
+          AMD64_HASH="$(awk -v asset="$AMD64_ASSET" '$2 == asset { print $1 }' dist-scoop/SHA256SUMS.txt)"
+          ARM64_HASH="$(awk -v asset="$ARM64_ASSET" '$2 == asset { print $1 }' dist-scoop/SHA256SUMS.txt)"
+
+          if [ -z "$AMD64_HASH" ] || [ -z "$ARM64_HASH" ]; then
+            echo "Could not resolve Windows asset hashes from SHA256SUMS.txt"
+            exit 1
+          fi
+
+          echo "amd64_asset=$AMD64_ASSET" >> "$GITHUB_OUTPUT"
+          echo "arm64_asset=$ARM64_ASSET" >> "$GITHUB_OUTPUT"
+          echo "amd64_hash=$AMD64_HASH" >> "$GITHUB_OUTPUT"
+          echo "arm64_hash=$ARM64_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Clone bucket repository
+        shell: bash
+        env:
+          SCOOP_BUCKET_REPO: ${{ vars.SCOOP_BUCKET_REPO }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$SCOOP_BUCKET_TOKEN" ]; then
+            echo "SCOOP_BUCKET_TOKEN secret is not configured."
+            exit 1
+          fi
+
+          git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/${SCOOP_BUCKET_REPO}.git" scoop-bucket
+
+      - name: Update manifest
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION_TRIMMED: ${{ steps.meta.outputs.version_trimmed }}
+          AMD64_ASSET: ${{ steps.hashes.outputs.amd64_asset }}
+          ARM64_ASSET: ${{ steps.hashes.outputs.arm64_asset }}
+          AMD64_HASH: ${{ steps.hashes.outputs.amd64_hash }}
+          ARM64_HASH: ${{ steps.hashes.outputs.arm64_hash }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p scoop-bucket/bucket
+
+          cat > scoop-bucket/bucket/codex-manage.json <<EOF
+          {
+            "version": "${VERSION_TRIMMED}",
+            "description": "Terminal UI for switching between Codex auth profiles",
+            "homepage": "https://github.com/${GITHUB_REPOSITORY}",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${VERSION}/${AMD64_ASSET}",
+                "hash": "${AMD64_HASH}"
+              },
+              "arm64": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${VERSION}/${ARM64_ASSET}",
+                "hash": "${ARM64_HASH}"
+              }
+            },
+            "bin": "codex-manage.exe",
+            "checkver": {
+              "github": "https://github.com/${GITHUB_REPOSITORY}"
+            }
+          }
+          EOF
+
+      - name: Commit and push bucket update
+        shell: bash
+        working-directory: scoop-bucket
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- bucket/codex-manage.json; then
+            echo "Manifest already up to date"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/codex-manage.json
+          git commit -m "codex-manage ${VERSION}"
+          git push

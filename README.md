@@ -65,6 +65,25 @@ Users can then install with:
 brew install AspireOne/tap/codex-manage
 ```
 
+## Scoop
+
+This repo can also update a separate Scoop bucket repository whenever a GitHub release is published.
+
+One-time setup:
+
+1. Create a bucket repo on GitHub, for example `AspireOne/scoop-bucket`.
+2. In this repo, add a repository variable named `SCOOP_BUCKET_REPO` with that value.
+3. Add a repository secret named `SCOOP_BUCKET_TOKEN` containing a GitHub token that can push to the bucket repo.
+
+After that, each published release updates `bucket/codex-manage.json` in the bucket automatically.
+
+Users can then install with:
+
+```powershell
+scoop bucket add AspireOne https://github.com/AspireOne/scoop-bucket
+scoop install codex-manage
+```
+
 ## Run
 
 ```sh
