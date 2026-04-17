@@ -310,7 +310,7 @@ func saveCurrentAuth(authFile, profileDir, name string) error {
 		return errors.New("profile name cannot be empty")
 	}
 	if !isValidProfileName(name) {
-		return errors.New("invalid profile name; use letters, numbers, dot, underscore, dash")
+		return errors.New("invalid profile name; use letters, numbers, dot, underscore, dash, @")
 	}
 	if !fileExists(authFile) {
 		return errors.New("no auth.json found - nothing to save")
@@ -354,7 +354,7 @@ func renameProfile(profileDir, oldName, newName string) error {
 		return errors.New("new profile name cannot be empty")
 	}
 	if !isValidProfileName(newName) {
-		return errors.New("invalid profile name; use letters, numbers, dot, underscore, dash")
+		return errors.New("invalid profile name; use letters, numbers, dot, underscore, dash, @")
 	}
 	if oldName == newName {
 		return nil
@@ -742,7 +742,7 @@ func isValidProfileName(name string) bool {
 		case r >= 'a' && r <= 'z':
 		case r >= 'A' && r <= 'Z':
 		case r >= '0' && r <= '9':
-		case r == '.', r == '_', r == '-':
+		case r == '.', r == '_', r == '-', r == '@':
 		default:
 			return false
 		}
