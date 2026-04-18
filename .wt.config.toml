@@ -1,0 +1,16 @@
+# .wt.config.toml — repo-level worktree config (commit this to the repo)
+# Copy to .wt.config.toml and adjust for your project.
+# See ~/.config/wt/config.toml for global defaults.
+
+baseBranch   = "main"
+worktreeRoot = ".trees"
+
+# Optional: force a specific shell for setup commands.
+# Defaults to the system shell (sh on Unix, cmd.exe on Windows).
+# shell = "bash"
+# shell = "pwsh"
+
+# Setup commands run once after the worktree is created.
+# Available template variables: {target}, {branch}, {root}
+setup = [
+]
