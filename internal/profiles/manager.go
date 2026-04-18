@@ -39,7 +39,6 @@ type ProfileIssue struct {
 type Manager struct {
 	AuthFile           string
 	ProfileDir         string
-	LegacyProfileDir   string
 	CurrentProfileFile string
 	NotesFile          string
 }
@@ -78,7 +77,6 @@ func NewManager(codexDir string) Manager {
 	return Manager{
 		AuthFile:           filepath.Join(codexDir, "auth.json"),
 		ProfileDir:         filepath.Join(managerDir, "profiles"),
-		LegacyProfileDir:   managerDir,
 		CurrentProfileFile: filepath.Join(managerDir, CurrentProfileMarkerName),
 		NotesFile:          filepath.Join(managerDir, profileNotesFileName),
 	}
@@ -88,14 +86,8 @@ func (m Manager) Snapshot() (Snapshot, error) {
 	if err := os.MkdirAll(m.ProfileDir, 0o700); err != nil {
 		return Snapshot{}, fmt.Errorf("failed to create profile directory: %w", err)
 	}
-	if err := os.MkdirAll(m.LegacyProfileDir, 0o700); err != nil {
-		return Snapshot{}, fmt.Errorf("failed to create legacy profile directory: %w", err)
-	}
-	if err := migrateLegacyProfiles(m.LegacyProfileDir, m.ProfileDir); err != nil {
-		return Snapshot{}, err
-	}
 
-	scan, err := scanProfiles(m.ProfileDir, m.LegacyProfileDir)
+	scan, err := scanProfiles(m.ProfileDir)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -147,7 +139,7 @@ func (m Manager) Activate(name string) error {
 	if err := m.SyncTrackedProfile(); err != nil {
 		return err
 	}
-	if err := activateProfile(m.AuthFile, []string{m.ProfileDir, m.LegacyProfileDir}, name); err != nil {
+	if err := activateProfile(m.AuthFile, []string{m.ProfileDir}, name); err != nil {
 		return err
 	}
 
@@ -704,72 +696,6 @@ func markerForProfile(profileDir, name string) (currentProfileMarker, error) {
 		return currentProfileMarker{}, fmt.Errorf("failed to read profile identity for %q: %w", name, err)
 	}
 	return currentProfileMarker{Name: name, Identity: identity}, nil
-}
-
-func migrateLegacyProfiles(legacyDir, profileDir string) error {
-	entries, err := os.ReadDir(legacyDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("failed to read legacy profile directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if !isProfileFilename(name) {
-			continue
-		}
-
-		legacyPath := filepath.Join(legacyDir, name)
-		if _, err := readAuthIdentity(legacyPath); err != nil {
-			continue
-		}
-
-		dst := filepath.Join(profileDir, name)
-		if !fileExists(dst) {
-			if err := os.Rename(legacyPath, dst); err != nil {
-				return fmt.Errorf("failed to migrate legacy profile %q: %w", name, err)
-			}
-			continue
-		}
-
-		same, err := filesEqual(legacyPath, dst)
-		if err != nil {
-			return err
-		}
-		if same {
-			if err := os.Remove(legacyPath); err != nil {
-				return fmt.Errorf("failed to remove duplicate legacy profile %q: %w", name, err)
-			}
-			continue
-		}
-
-		migratedName, err := uniqueMigratedProfileName(profileDir, name)
-		if err != nil {
-			return err
-		}
-		if err := os.Rename(legacyPath, filepath.Join(profileDir, migratedName)); err != nil {
-			return fmt.Errorf("failed to migrate conflicting legacy profile %q: %w", name, err)
-		}
-	}
-
-	return nil
-}
-
-func uniqueMigratedProfileName(profileDir, name string) (string, error) {
-	base := name + "-legacy"
-	candidate := base
-	for i := 2; ; i++ {
-		if !fileExists(filepath.Join(profileDir, candidate)) {
-			return candidate, nil
-		}
-		candidate = fmt.Sprintf("%s-%d", base, i)
-	}
 }
 
 func readAuthIdentity(path string) (authIdentity, error) {

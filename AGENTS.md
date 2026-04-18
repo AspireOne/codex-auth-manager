@@ -62,14 +62,12 @@ go run scripts/release.go vX.Y.Z
 - **Error Handling:** Wrap filesystem and profile-operation errors with context; display recoverable errors in the TUI status area.
 - **Atomic File Operations:** Uses atomic writes for configuration and marker files to prevent corruption.
 - **Profile Location:** Profiles are stored in `~/.codex/auth_manager/profiles/`.
-- **Legacy Support:** Automatically migrates profiles from the older `~/.codex/auth_manager/` directory.
 
 ## Behavioral Invariants
 - Activating a profile must sync pending changes from the currently tracked profile before replacing `auth.json`.
 - The `current-profile` marker tracks the active saved profile by identity, not just by filename.
 - Unsaved/custom auth states must remain distinguishable from saved profiles.
 - Rename, delete, and logout operations must keep marker state consistent.
-- Legacy profile migration from `~/.codex/auth_manager/` to `~/.codex/auth_manager/profiles/` must remain backward-compatible.
 
 ## File I/O Requirements
 - Writes to auth, profile, and marker files should remain atomic where practical: write to a temp file in the target directory, set restrictive permissions, close it, then rename it into place.

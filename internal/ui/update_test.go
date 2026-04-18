@@ -799,8 +799,13 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 
 	currentPlain := stripANSI(currentLine)
 	otherPlain := stripANSI(otherLine)
-	currentIdx := lipgloss.Width(currentPlain[:strings.Index(currentPlain, "current note")])
-	otherIdx := lipgloss.Width(otherPlain[:strings.Index(otherPlain, "other note")])
+	currentNoteIdx := strings.Index(currentPlain, "current note")
+	otherNoteIdx := strings.Index(otherPlain, "other note")
+	if currentNoteIdx < 0 || otherNoteIdx < 0 {
+		t.Fatalf("rendered list missing expected note positions:\n%s", rendered)
+	}
+	currentIdx := lipgloss.Width(currentPlain[:currentNoteIdx])
+	otherIdx := lipgloss.Width(otherPlain[:otherNoteIdx])
 	if currentIdx != otherIdx {
 		t.Fatalf("notes start at different columns: current=%d other=%d\n%s", currentIdx, otherIdx, rendered)
 	}

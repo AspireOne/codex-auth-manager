@@ -207,28 +207,6 @@ func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
 	assertDirExists(t, filepath.Join(codexDir, "auth_manager", "profiles"))
 }
 
-func TestManagerSnapshotMigratesLegacyProfile(t *testing.T) {
-	m, paths := newTestManager(t)
-	const profileName = "work-account"
-	legacyProfile := filepath.Join(paths.legacyDir, profileName)
-	migratedProfile := filepath.Join(paths.profileDir, profileName)
-	writeAuthFile(t, legacyProfile, realisticAuthFixture(
-		"acct_legacy_work",
-		"session-legacy-work",
-		"refresh-legacy-work",
-		"https://chatgpt.com/backend-api",
-	))
-
-	snapshot, err := m.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-
-	assertFileMissing(t, legacyProfile)
-	assertFileExists(t, migratedProfile)
-	assertProfiles(t, snapshot.Profiles, []string{profileName})
-}
-
 func TestManagerSnapshotIgnoresStaleCurrentProfileMarker(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, paths.authFile, authFixture("account-active", "api-active"))
@@ -271,64 +249,6 @@ func TestManagerSnapshotIgnoresInvalidProfileFiles(t *testing.T) {
 	}
 	if snapshot.InvalidProfiles[0].Reason != "invalid JSON" {
 		t.Fatalf("invalid profile reason = %q, want invalid JSON", snapshot.InvalidProfiles[0].Reason)
-	}
-}
-
-func TestManagerSnapshotReportsInvalidLegacyProfileFiles(t *testing.T) {
-	m, paths := newTestManager(t)
-	if err := os.WriteFile(filepath.Join(paths.legacyDir, "corrupt-legacy"), []byte("{not json}\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile corrupt legacy profile: %v", err)
-	}
-
-	snapshot, err := m.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-
-	assertProfiles(t, snapshot.Profiles, nil)
-	if len(snapshot.InvalidProfiles) != 1 {
-		t.Fatalf("Snapshot().InvalidProfiles = %#v, want one invalid profile", snapshot.InvalidProfiles)
-	}
-	if snapshot.InvalidProfiles[0].Name != "corrupt-legacy" {
-		t.Fatalf("invalid legacy profile name = %q, want corrupt-legacy", snapshot.InvalidProfiles[0].Name)
-	}
-	if snapshot.InvalidProfiles[0].Reason != "invalid JSON" {
-		t.Fatalf("invalid legacy profile reason = %q, want invalid JSON", snapshot.InvalidProfiles[0].Reason)
-	}
-}
-
-func TestManagerSnapshotMigratesLegacyConflictKeepingBothProfiles(t *testing.T) {
-	m, paths := newTestManager(t)
-	writeAuthFile(t, filepath.Join(paths.legacyDir, "foo"), authFixture("legacy-account", "legacy-api"))
-	writeAuthFile(t, filepath.Join(paths.profileDir, "foo"), authFixture("profiles-account", "profiles-api"))
-
-	snapshot, err := m.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-
-	assertFileExists(t, filepath.Join(paths.profileDir, "foo"))
-	assertFileExists(t, filepath.Join(paths.profileDir, "foo-legacy"))
-	assertFileMissing(t, filepath.Join(paths.legacyDir, "foo"))
-	assertProfiles(t, snapshot.Profiles, []string{"foo", "foo-legacy"})
-
-	profilesIdentity, err := readAuthIdentity(filepath.Join(paths.profileDir, "foo"))
-	if err != nil {
-		t.Fatalf("readAuthIdentity(profiles/foo): %v", err)
-	}
-	if profilesIdentity.AccountID != "profiles-account" {
-		t.Fatalf("profiles/foo account ID = %q, want profiles-account", profilesIdentity.AccountID)
-	}
-
-	legacyIdentity, err := readAuthIdentity(filepath.Join(paths.profileDir, "foo-legacy"))
-	if err != nil {
-		t.Fatalf("readAuthIdentity(profiles/foo-legacy): %v", err)
-	}
-	if legacyIdentity.AccountID != "legacy-account" {
-		t.Fatalf("profiles/foo-legacy account ID = %q, want legacy-account", legacyIdentity.AccountID)
-	}
-	if profilesIdentity.matches(legacyIdentity) || legacyIdentity.matches(profilesIdentity) {
-		t.Fatalf("migrated identities match, want distinct identities: profiles/foo=%#v profiles/foo-legacy=%#v", profilesIdentity, legacyIdentity)
 	}
 }
 
@@ -422,7 +342,6 @@ func TestManagerDeleteRemovesNote(t *testing.T) {
 type testManagerPaths struct {
 	authFile   string
 	profileDir string
-	legacyDir  string
 	markerFile string
 	notesFile  string
 }
@@ -434,12 +353,11 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 	paths := testManagerPaths{
 		authFile:   filepath.Join(root, "auth.json"),
 		profileDir: filepath.Join(root, "auth_manager", "profiles"),
-		legacyDir:  filepath.Join(root, "auth_manager"),
 		markerFile: filepath.Join(root, "auth_manager", CurrentProfileMarkerName),
 		notesFile:  filepath.Join(root, "auth_manager", profileNotesFileName),
 	}
 
-	for _, dir := range []string{paths.profileDir, paths.legacyDir} {
+	for _, dir := range []string{paths.profileDir, filepath.Dir(paths.markerFile)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", dir, err)
 		}
@@ -448,7 +366,6 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 	return Manager{
 		AuthFile:           paths.authFile,
 		ProfileDir:         paths.profileDir,
-		LegacyProfileDir:   paths.legacyDir,
 		CurrentProfileFile: paths.markerFile,
 		NotesFile:          paths.notesFile,
 	}, paths
