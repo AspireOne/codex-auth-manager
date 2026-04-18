@@ -57,6 +57,16 @@ Enter
 Wait+Screen /Activated profile "work"\./
 Sleep 2200ms
 
+# Add a note to the active profile and show it inline in the list.
+Type "n"
+Wait+Screen /Edit note for "work":/
+Sleep 900ms
+Type "Plus trial ends soon"
+Sleep 600ms
+Enter
+Wait+Screen /Updated note for "work"\./
+Sleep 2400ms
+
 # Rename the active profile.
 Type "r"
 Wait+Screen /Rename profile "work" to:/
@@ -65,7 +75,7 @@ Type "-main"
 Sleep 600ms
 Enter
 Wait+Screen /Renamed "work" to "work-main"\./
-Sleep 1800ms
+Sleep 2200ms
 
 # Delete the temporary demo profile.
 Up
