@@ -19,6 +19,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case tea.PasteMsg:
+		if m.mode == modeInput {
+			m.inputValue += sanitizeInputText(msg.Content)
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		switch m.mode {
 		case modeNormal:
@@ -194,9 +200,8 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	runes := []rune(msg.String())
-	if len(runes) == 1 && isPrintableRune(runes[0]) {
-		m.inputValue += string(runes[0])
+	if text := sanitizeInputText(msg.Key().Text); text != "" {
+		m.inputValue += text
 	}
 
 	return m, nil

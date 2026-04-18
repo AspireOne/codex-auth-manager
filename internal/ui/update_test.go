@@ -538,6 +538,38 @@ func TestRemovingProfileNoteClearsIt(t *testing.T) {
 	}
 }
 
+func TestInputModeAcceptsSpaceAndPrintableText(t *testing.T) {
+	m := appModel{
+		mode:          modeInput,
+		pendingAction: actionEditNote,
+		inputValue:    "old",
+	}
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: " "}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "note"}))
+	got := updatedModel.(appModel)
+
+	if got.inputValue != "old note" {
+		t.Fatalf("inputValue = %q, want %q", got.inputValue, "old note")
+	}
+}
+
+func TestInputModeAppendsBracketedPasteContent(t *testing.T) {
+	m := appModel{
+		mode:          modeInput,
+		pendingAction: actionEditNote,
+		inputValue:    "old",
+	}
+
+	updatedModel, _ := m.Update(tea.PasteMsg{Content: " note\tfrom\r\npaste"})
+	got := updatedModel.(appModel)
+
+	if got.inputValue != "old note from  paste" {
+		t.Fatalf("inputValue = %q, want %q", got.inputValue, "old note from  paste")
+	}
+}
+
 func profileViews(names ...string) []profilemgr.ProfileSummary {
 	profiles := make([]profilemgr.ProfileSummary, len(names))
 	for i, name := range names {
