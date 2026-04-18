@@ -570,6 +570,25 @@ func TestInputModeAppendsBracketedPasteContent(t *testing.T) {
 	}
 }
 
+func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
+	m := appModel{width: 44}
+
+	line := m.renderProfileLine(
+		itemStyle,
+		"  ",
+		"work",
+		"this note should wrap onto another line cleanly",
+	)
+
+	parts := strings.Split(line, "\n")
+	if len(parts) < 2 {
+		t.Fatalf("rendered line did not wrap:\n%s", line)
+	}
+	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note should wrap") {
+		t.Fatalf("rendered first line missing inline note:\n%s", line)
+	}
+}
+
 func profileViews(names ...string) []profilemgr.ProfileSummary {
 	profiles := make([]profilemgr.ProfileSummary, len(names))
 	for i, name := range names {
