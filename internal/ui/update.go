@@ -19,6 +19,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case updateCheckMsg:
+		if msg.err != nil || !msg.result.Checked {
+			m.updateChecked = false
+			m.updateNotice = ""
+			return m, nil
+		}
+
+		m.updateChecked = true
+		m.updateNotice = ""
+		if msg.result.UpdateAvailable {
+			m.updateNotice = fmt.Sprintf("Update available: %s", msg.result.LatestVersion)
+		}
+		return m, nil
+
 	case tea.PasteMsg:
 		if m.mode == modeInput {
 			m.inputValue += sanitizeInputText(msg.Content)
@@ -132,7 +146,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setStatus("Refreshed.")
-		return m, nil
+		return m, m.updateCheckCmd()
 	}
 
 	return m, nil

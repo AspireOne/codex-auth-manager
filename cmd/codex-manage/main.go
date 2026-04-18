@@ -19,7 +19,7 @@ func main() {
 		return
 	}
 
-	if err := ui.Run(); err != nil {
+	if err := ui.Run(version); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}

@@ -10,9 +10,179 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/updatecheck"
 )
 
 const testWorkProfileName = "work"
+
+func TestInitStartsUpdateCheckForReleaseBuilds(t *testing.T) {
+	m := newAppModel(t.TempDir())
+	m.appVersion = "v1.2.3"
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init() = nil, want update-check command")
+	}
+}
+
+func TestUpdateCheckMessageSetsPersistentNotice(t *testing.T) {
+	m := appModel{}
+
+	updatedModel, _ := m.Update(updateCheckMsg{
+		result: updatecheck.Result{
+			CurrentVersion:  "v1.2.3",
+			LatestVersion:   "v1.3.0",
+			Checked:         true,
+			UpdateAvailable: true,
+		},
+	})
+	got := updatedModel.(appModel)
+
+	if got.updateNotice != "Update available: v1.3.0" {
+		t.Fatalf("updateNotice = %q, want %q", got.updateNotice, "Update available: v1.3.0")
+	}
+	if !got.updateChecked {
+		t.Fatal("updateChecked = false, want true after successful check")
+	}
+}
+
+func TestSkippedUpdateCheckStaysNeutral(t *testing.T) {
+	m := appModel{}
+
+	updatedModel, _ := m.Update(updateCheckMsg{
+		result: updatecheck.Result{
+			CurrentVersion: "dev",
+			Checked:        false,
+		},
+	})
+	got := updatedModel.(appModel)
+
+	if got.updateChecked {
+		t.Fatal("updateChecked = true, want false when the checker skips the lookup")
+	}
+
+	view := fmt.Sprint(got.View())
+	if !strings.Contains(view, "not checked") {
+		t.Fatalf("View() missing neutral unchecked state after skipped check:\n%s", view)
+	}
+	if strings.Contains(view, "up to date") {
+		t.Fatalf("View() incorrectly claims up to date after skipped check:\n%s", view)
+	}
+}
+
+func TestRenderHeaderIncludesUpdateNotice(t *testing.T) {
+	m := appModel{
+		updateChecked: true,
+		updateNotice:  "Update available: v1.3.0",
+	}
+
+	view := fmt.Sprint(m.View())
+	for _, want := range []string{"Update:", "Update available: v1.3.0"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestRenderHeaderDoesNotClaimUpToDateBeforeSuccessfulCheck(t *testing.T) {
+	m := appModel{}
+
+	view := fmt.Sprint(m.View())
+	if !strings.Contains(view, "Update:") {
+		t.Fatalf("View() missing update line:\n%s", view)
+	}
+	if !strings.Contains(view, "not checked") {
+		t.Fatalf("View() missing neutral unchecked state:\n%s", view)
+	}
+	if strings.Contains(view, "up to date") {
+		t.Fatalf("View() incorrectly claims up to date before a successful check:\n%s", view)
+	}
+}
+
+func TestSuccessfulUpdateCheckWithoutUpdateRendersUpToDate(t *testing.T) {
+	m := appModel{}
+
+	updatedModel, _ := m.Update(updateCheckMsg{
+		result: updatecheck.Result{
+			CurrentVersion:  "v1.2.3",
+			LatestVersion:   "v1.2.3",
+			Checked:         true,
+			UpdateAvailable: false,
+		},
+	})
+	got := updatedModel.(appModel)
+
+	if !got.updateChecked {
+		t.Fatal("updateChecked = false, want true after successful check")
+	}
+	if got.updateNotice != "" {
+		t.Fatalf("updateNotice = %q, want empty", got.updateNotice)
+	}
+
+	view := fmt.Sprint(got.View())
+	if !strings.Contains(view, "up to date") {
+		t.Fatalf("View() missing up-to-date state after successful check:\n%s", view)
+	}
+}
+
+func TestSuccessfulNoUpdateClearsStaleNotice(t *testing.T) {
+	m := appModel{
+		updateChecked: true,
+		updateNotice:  "Update available: v1.3.0",
+	}
+
+	updatedModel, _ := m.Update(updateCheckMsg{
+		result: updatecheck.Result{
+			CurrentVersion:  "v1.3.0",
+			LatestVersion:   "v1.3.0",
+			Checked:         true,
+			UpdateAvailable: false,
+		},
+	})
+	got := updatedModel.(appModel)
+
+	if !got.updateChecked {
+		t.Fatal("updateChecked = false, want true after a successful no-update check")
+	}
+	if got.updateNotice != "" {
+		t.Fatalf("updateNotice = %q, want empty", got.updateNotice)
+	}
+
+	view := fmt.Sprint(got.View())
+	if strings.Contains(view, "Update available: v1.3.0") {
+		t.Fatalf("View() still shows stale notice:\n%s", view)
+	}
+	if !strings.Contains(view, "up to date") {
+		t.Fatalf("View() missing up-to-date state after clearing stale notice:\n%s", view)
+	}
+}
+
+func TestFailedUpdateCheckClearsStaleNoticeToNeutral(t *testing.T) {
+	m := appModel{
+		updateChecked: true,
+		updateNotice:  "Update available: v1.3.0",
+	}
+
+	updatedModel, _ := m.Update(updateCheckMsg{
+		err: fmt.Errorf("network unavailable"),
+	})
+	got := updatedModel.(appModel)
+
+	if got.updateChecked {
+		t.Fatal("updateChecked = true, want false after a failed check")
+	}
+	if got.updateNotice != "" {
+		t.Fatalf("updateNotice = %q, want empty", got.updateNotice)
+	}
+
+	view := fmt.Sprint(got.View())
+	if strings.Contains(view, "Update available: v1.3.0") {
+		t.Fatalf("View() still shows stale notice after failed check:\n%s", view)
+	}
+	if !strings.Contains(view, "not checked") {
+		t.Fatalf("View() missing neutral unchecked state after failed check:\n%s", view)
+	}
+}
 
 func TestHandleActionErrorReloadsStateForErrStateChanged(t *testing.T) {
 	home := t.TempDir()

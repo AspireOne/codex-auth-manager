@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/updatecheck"
 )
 
 type mode int
@@ -46,6 +48,9 @@ type appModel struct {
 
 	currentProfile string
 	authActive     bool
+	appVersion     string
+	updateChecked  bool
+	updateNotice   string
 
 	width  int
 	height int
@@ -63,13 +68,19 @@ type appModel struct {
 	quitting bool
 }
 
-func Run() error {
+type updateCheckMsg struct {
+	result updatecheck.Result
+	err    error
+}
+
+func Run(version string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	m := newAppModel(home)
+	m.appVersion = version
 	if err := m.reload(); err != nil {
 		return fmt.Errorf("failed to initialize: %w", err)
 	}
@@ -89,7 +100,7 @@ func newAppModel(home string) appModel {
 }
 
 func (m appModel) Init() tea.Cmd {
-	return nil
+	return m.updateCheckCmd()
 }
 
 func (m *appModel) reload() error {
@@ -201,4 +212,11 @@ func (m *appModel) reloadAndExitWithError(err error) appModel {
 		m.setError(err.Error())
 	}
 	return m.exitMode()
+}
+
+func (m appModel) updateCheckCmd() tea.Cmd {
+	return func() tea.Msg {
+		result, err := updatecheck.New().Check(context.Background(), m.appVersion)
+		return updateCheckMsg{result: result, err: err}
+	}
 }

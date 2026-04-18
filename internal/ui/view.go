@@ -49,11 +49,24 @@ func (m appModel) renderHeader() string {
 		"",
 		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
 		fmt.Sprintf("Auth status:     %s", currentTag.Render(authState)),
+		m.renderUpdateLine(),
 		fmt.Sprintf("Saved profiles:  %s", headerValue.Render(fmt.Sprintf("%d", len(m.profiles)))),
 		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileManager.ProfileDir)),
 	)
 
 	return panelStyle.Render(body)
+}
+
+func (m appModel) renderUpdateLine() string {
+	if !m.updateChecked {
+		return "Update:          not checked"
+	}
+
+	if m.updateNotice == "" {
+		return "Update:          up to date"
+	}
+
+	return fmt.Sprintf("Update:          %s", infoStyle.Render(m.updateNotice))
 }
 
 func (m appModel) renderList() string {
