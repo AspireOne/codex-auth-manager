@@ -75,6 +75,7 @@ func (m appModel) renderList() string {
 	}
 
 	lines := make([]string, 0, len(m.profiles))
+	profileColumnWidth := m.profileColumnWidth()
 	for i, p := range m.profiles {
 		prefix := "  "
 		style := itemStyle
@@ -84,25 +85,20 @@ func (m appModel) renderList() string {
 			style = selectedItemStyle
 		}
 
-		label := p.Name
-		if p.Name == m.currentProfile {
-			label += currentTag.Render("  • current")
-		}
-
-		lines = append(lines, m.renderProfileLine(style, prefix, label, p.Note))
+		lines = append(lines, m.renderProfileLine(style, prefix, p.Name, p.Note, p.Name == m.currentProfile, profileColumnWidth))
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
 }
 
-func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string) string {
-	base := style.Render(prefix + label)
+func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, isCurrent bool, profileColumnWidth int) string {
+	base := m.renderProfileCell(style, prefix, label, isCurrent, profileColumnWidth)
 	note = strings.TrimSpace(note)
 	if note == "" {
 		return base
 	}
 
-	separator := "  -  "
+	separator := "  "
 	noteStyle := footerStyle
 	continuationIndent := strings.Repeat(" ", lipgloss.Width(base)+lipgloss.Width(separator))
 	availableWidth := m.listContentWidth()
@@ -129,6 +125,41 @@ func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note st
 		line += "\n" + noteStyle.Render(continuationIndent+part)
 	}
 	return line
+}
+
+func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, isCurrent bool, profileColumnWidth int) string {
+	const currentMarker = " ●"
+	const markerWidth = 2
+
+	cellText := prefix + label
+	paddingWidth := profileColumnWidth - lipgloss.Width(cellText) - markerWidth
+	if paddingWidth < 0 {
+		paddingWidth = 0
+	}
+
+	cell := style.Render(cellText) + strings.Repeat(" ", paddingWidth)
+	if isCurrent {
+		return cell + currentTag.Render(currentMarker)
+	}
+	return cell + strings.Repeat(" ", markerWidth)
+}
+
+func (m appModel) profileColumnWidth() int {
+	const markerWidth = 2
+
+	width := 0
+	for i, p := range m.profiles {
+		prefix := "  "
+		if i == m.cursor {
+			prefix = "» "
+		}
+
+		lineWidth := lipgloss.Width(prefix+p.Name) + markerWidth
+		if lineWidth > width {
+			width = lineWidth
+		}
+	}
+	return width
 }
 
 func (m appModel) listContentWidth() int {

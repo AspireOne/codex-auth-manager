@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/updatecheck"
@@ -741,13 +743,20 @@ func TestInputModeAppendsBracketedPasteContent(t *testing.T) {
 }
 
 func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
-	m := appModel{width: 44}
+	m := appModel{
+		width: 44,
+		profiles: []profilemgr.ProfileSummary{
+			{Name: "work"},
+		},
+	}
 
 	line := m.renderProfileLine(
 		itemStyle,
 		"  ",
 		"work",
 		"this note should wrap onto another line cleanly",
+		false,
+		m.profileColumnWidth(),
 	)
 
 	parts := strings.Split(line, "\n")
@@ -756,6 +765,47 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 	}
 	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note should wrap") {
 		t.Fatalf("rendered first line missing inline note:\n%s", line)
+	}
+}
+
+func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
+	m := appModel{
+		width:          80,
+		cursor:         0,
+		currentProfile: "work",
+		profiles: []profilemgr.ProfileSummary{
+			{Name: "work", Note: "current note"},
+			{Name: "personal", Note: "other note"},
+		},
+	}
+
+	rendered := m.renderList()
+	lines := strings.Split(rendered, "\n")
+
+	var currentLine string
+	var otherLine string
+	for _, line := range lines {
+		if strings.Contains(line, "current note") {
+			currentLine = line
+		}
+		if strings.Contains(line, "other note") {
+			otherLine = line
+		}
+	}
+
+	if currentLine == "" || otherLine == "" {
+		t.Fatalf("rendered list missing expected notes:\n%s", rendered)
+	}
+
+	currentPlain := stripANSI(currentLine)
+	otherPlain := stripANSI(otherLine)
+	currentIdx := lipgloss.Width(currentPlain[:strings.Index(currentPlain, "current note")])
+	otherIdx := lipgloss.Width(otherPlain[:strings.Index(otherPlain, "other note")])
+	if currentIdx != otherIdx {
+		t.Fatalf("notes start at different columns: current=%d other=%d\n%s", currentIdx, otherIdx, rendered)
+	}
+	if strings.Contains(currentPlain, "• current") {
+		t.Fatalf("current row still renders verbose label:\n%s", currentPlain)
 	}
 }
 
@@ -777,3 +827,10 @@ func readTestFile(t *testing.T, path string) []byte {
 	}
 	return data
 }
+
+func stripANSI(s string) string {
+	t := ansiPattern.ReplaceAllString(s, "")
+	return strings.ReplaceAll(t, "\u001b[m", "")
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
