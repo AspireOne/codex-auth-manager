@@ -50,7 +50,7 @@ func TestHandleActionErrorReloadsStateForErrStateChanged(t *testing.T) {
 	if !got.authActive {
 		t.Fatalf("authActive = false, want true after reload")
 	}
-	if len(got.profiles) != 1 || got.profiles[0] != "saved" {
+	if len(got.profiles) != 1 || got.profiles[0].Name != "saved" {
 		t.Fatalf("profiles = %#v, want [\"saved\"]", got.profiles)
 	}
 	if got.errText == "" {
@@ -127,21 +127,21 @@ func TestRestartRequired(t *testing.T) {
 func TestDeleteConfirmationPromptText(t *testing.T) {
 	tests := []struct {
 		name           string
-		profiles       []string
+		profiles       []profilemgr.ProfileSummary
 		cursor         int
 		currentProfile string
 		want           string
 	}{
 		{
 			name:           "non-current profile",
-			profiles:       []string{testWorkProfileName, "side"},
+			profiles:       profileViews(testWorkProfileName, "side"),
 			cursor:         1,
 			currentProfile: testWorkProfileName,
 			want:           `Delete saved profile "side"? [y/N]`,
 		},
 		{
 			name:           "current profile",
-			profiles:       []string{testWorkProfileName, "side"},
+			profiles:       profileViews(testWorkProfileName, "side"),
 			cursor:         0,
 			currentProfile: testWorkProfileName,
 			want:           fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", testWorkProfileName),
@@ -213,7 +213,7 @@ func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if len(m.profiles) != 1 || m.profiles[0] != testWorkProfileName {
+	if len(m.profiles) != 1 || m.profiles[0].Name != testWorkProfileName {
 		t.Fatalf("profiles = %#v, want [%q]", m.profiles, testWorkProfileName)
 	}
 	if m.currentProfile != testWorkProfileName {
@@ -446,11 +446,104 @@ func setupCustomAuthActivationTest(t *testing.T) (appModel, string, []byte, []by
 	if m.currentProfile != "" {
 		t.Fatalf("currentProfile = %q, want custom/unsaved", m.currentProfile)
 	}
-	if len(m.profiles) != 1 || m.profiles[0] != testWorkProfileName {
+	if len(m.profiles) != 1 || m.profiles[0].Name != testWorkProfileName {
 		t.Fatalf("profiles = %#v, want [%q]", m.profiles, testWorkProfileName)
 	}
 	m.cursor = 0
 	return m, authPath, customAuth, workAuth
+}
+
+func TestEditingProfileNoteUpdatesStatusAndView(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
+	notesPath := filepath.Join(codexDir, "auth_manager", ".profile-notes.json")
+	profilePath := filepath.Join(profileDir, testWorkProfileName)
+
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(profilePath, []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+	if err := os.WriteFile(notesPath, []byte("{\"work\":\"old note\"}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile notes: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.cursor = 0
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "n"}))
+	m = updatedModel.(appModel)
+	if m.mode != modeInput || m.pendingAction != actionEditNote {
+		t.Fatalf("mode=%v pendingAction=%v, want note input mode", m.mode, m.pendingAction)
+	}
+	if m.inputValue != "old note" {
+		t.Fatalf("inputValue = %q, want existing note", m.inputValue)
+	}
+
+	m.inputValue = "updated note"
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	got := updatedModel.(appModel)
+
+	if got.status != `Updated note for "work".` {
+		t.Fatalf("status = %q, want updated-note message", got.status)
+	}
+	if got.profiles[0].Note != "updated note" {
+		t.Fatalf("note = %q, want %q", got.profiles[0].Note, "updated note")
+	}
+	view := fmt.Sprint(got.View())
+	if !strings.Contains(view, "updated note") {
+		t.Fatalf("View() missing updated note:\n%s", view)
+	}
+}
+
+func TestRemovingProfileNoteClearsIt(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
+	notesPath := filepath.Join(codexDir, "auth_manager", ".profile-notes.json")
+	profilePath := filepath.Join(profileDir, testWorkProfileName)
+
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(profilePath, []byte("{\"auth_mode\":\"account\",\"tokens\":{\"account_id\":\"acct\"}}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+	if err := os.WriteFile(notesPath, []byte("{\"work\":\"old note\"}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile notes: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.cursor = 0
+	m.mode = modeInput
+	m.pendingAction = actionEditNote
+	m.inputValue = ""
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	got := updatedModel.(appModel)
+
+	if got.status != `Removed note for "work".` {
+		t.Fatalf("status = %q, want removed-note message", got.status)
+	}
+	if got.profiles[0].Note != "" {
+		t.Fatalf("note = %q, want empty", got.profiles[0].Note)
+	}
+}
+
+func profileViews(names ...string) []profilemgr.ProfileSummary {
+	profiles := make([]profilemgr.ProfileSummary, len(names))
+	for i, name := range names {
+		profiles[i] = profilemgr.ProfileSummary{Name: name}
+	}
+	return profiles
 }
 
 func readTestFile(t *testing.T, path string) []byte {

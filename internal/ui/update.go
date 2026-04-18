@@ -58,11 +58,10 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		if len(m.profiles) == 0 {
-			m.setError("No profiles to rename.")
-			return m, nil
-		}
-		return m.enterInput(actionRename, fmt.Sprintf("Rename profile %q to:", m.selectedProfile()), m.selectedProfile()), nil
+		return m.enterRenameMode(), nil
+
+	case "n":
+		return m.enterEditNoteMode(), nil
 
 	case "s":
 		if !m.authActive {
@@ -88,7 +87,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No profiles to delete.")
 			return m, nil
 		}
-		name := m.selectedProfile()
+		name := m.selectedProfileName()
 		prompt := fmt.Sprintf("Delete saved profile %q? [y/N]", name)
 		if name == m.currentProfile {
 			prompt = fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", name)
@@ -107,7 +106,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No profiles to activate.")
 			return m, nil
 		}
-		name := m.selectedProfile()
+		name := m.selectedProfileName()
 		if name == m.currentProfile {
 			m.setInfo(fmt.Sprintf("Profile %q is already active.", name))
 			return m, nil
@@ -155,7 +154,7 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.exitMode(), nil
 
 		case actionRename:
-			oldName := m.selectedProfile()
+			oldName := m.selectedProfileName()
 			if err := m.profileManager.Rename(oldName, value, m.currentProfile); err != nil {
 				return m.handleActionError(err), nil
 			}
@@ -163,11 +162,26 @@ func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.setError(err.Error())
 				return m.exitMode(), nil
 			}
-			m.cursor = indexOf(m.profiles, value)
+			m.cursor = indexOfProfile(m.profiles, value)
 			if m.cursor < 0 {
 				m.cursor = 0
 			}
 			m.setStatus(fmt.Sprintf("Renamed %q to %q.", oldName, value))
+			return m.exitMode(), nil
+		case actionEditNote:
+			name := m.selectedProfileName()
+			if err := m.profileManager.SetNote(name, value); err != nil {
+				return m.handleActionError(err), nil
+			}
+			if err := m.reload(); err != nil {
+				m.setError(err.Error())
+				return m.exitMode(), nil
+			}
+			if value == "" {
+				m.setStatus(fmt.Sprintf("Removed note for %q.", name))
+			} else {
+				m.setStatus(fmt.Sprintf("Updated note for %q.", name))
+			}
 			return m.exitMode(), nil
 		}
 		return m.exitMode(), nil
@@ -195,14 +209,14 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "y":
 		switch m.pendingAction {
-		case actionNone, actionSave, actionRename:
+		case actionNone, actionSave, actionRename, actionEditNote:
 			return m.exitMode(), nil
 		case actionActivate:
-			name := m.selectedProfile()
+			name := m.selectedProfileName()
 			m = m.activateProfile(name)
 			return m.exitMode(), nil
 		case actionDelete:
-			name := m.selectedProfile()
+			name := m.selectedProfileName()
 			if err := m.profileManager.Delete(name, m.currentProfile); err != nil {
 				return m.handleActionError(err), nil
 			}
@@ -231,6 +245,23 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m appModel) enterRenameMode() appModel {
+	if len(m.profiles) == 0 {
+		m.setError("No profiles to rename.")
+		return m
+	}
+	return m.enterInput(actionRename, fmt.Sprintf("Rename profile %q to:", m.selectedProfileName()), m.selectedProfileName())
+}
+
+func (m appModel) enterEditNoteMode() appModel {
+	if len(m.profiles) == 0 {
+		m.setError("No profiles to edit.")
+		return m
+	}
+	selected := m.selectedProfile()
+	return m.enterInput(actionEditNote, fmt.Sprintf("Edit note for %q:", selected.Name), selected.Note)
 }
 
 func (m *appModel) activateProfile(name string) appModel {

@@ -15,14 +15,20 @@ import (
 )
 
 const CurrentProfileMarkerName = "current-profile"
+const profileNotesFileName = ".profile-notes.json"
 
 const invalidJSONReason = "invalid JSON"
 
 type Snapshot struct {
-	Profiles        []string
+	Profiles        []ProfileSummary
 	InvalidProfiles []ProfileIssue
 	CurrentProfile  string
 	AuthActive      bool
+}
+
+type ProfileSummary struct {
+	Name string
+	Note string
 }
 
 type ProfileIssue struct {
@@ -35,6 +41,7 @@ type Manager struct {
 	ProfileDir         string
 	LegacyProfileDir   string
 	CurrentProfileFile string
+	NotesFile          string
 }
 
 var (
@@ -43,7 +50,7 @@ var (
 )
 
 type profileScan struct {
-	Profiles        []string
+	Profiles        []ProfileSummary
 	InvalidProfiles []ProfileIssue
 }
 
@@ -73,6 +80,7 @@ func NewManager(codexDir string) Manager {
 		ProfileDir:         filepath.Join(managerDir, "profiles"),
 		LegacyProfileDir:   managerDir,
 		CurrentProfileFile: filepath.Join(managerDir, CurrentProfileMarkerName),
+		NotesFile:          filepath.Join(managerDir, profileNotesFileName),
 	}
 }
 
@@ -91,6 +99,11 @@ func (m Manager) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	notes, err := readProfileNotes(m.NotesFile)
+	if err != nil {
+		notes = map[string]string{}
+	}
+	applyProfileNotes(scan.Profiles, notes)
 
 	snapshot := Snapshot{
 		Profiles:        scan.Profiles,
@@ -101,7 +114,7 @@ func (m Manager) Snapshot() (Snapshot, error) {
 		return snapshot, nil
 	}
 
-	marker, err := resolveCurrentProfileMarker(m.AuthFile, m.CurrentProfileFile, m.ProfileDir, scan.Profiles)
+	marker, err := resolveCurrentProfileMarker(m.AuthFile, m.CurrentProfileFile, m.ProfileDir, profileNames(scan.Profiles))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -114,7 +127,7 @@ func (m Manager) SyncTrackedProfile() error {
 		return nil
 	}
 
-	profiles, err := listProfiles(m.ProfileDir)
+	profiles, err := listProfileNames(m.ProfileDir)
 	if err != nil {
 		return err
 	}
@@ -169,6 +182,9 @@ func (m Manager) Rename(oldName, newName, currentProfile string) error {
 	if err := renameProfile(m.ProfileDir, oldName, newName); err != nil {
 		return err
 	}
+	if err := m.renameNote(oldName, newName); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
 	if currentProfile != oldName {
 		return nil
 	}
@@ -185,6 +201,9 @@ func (m Manager) Rename(oldName, newName, currentProfile string) error {
 func (m Manager) Delete(name, currentProfile string) error {
 	if err := deleteProfile(m.ProfileDir, name); err != nil {
 		return err
+	}
+	if err := m.deleteNote(name); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	if currentProfile == name {
 		if err := clearCurrentProfileMarker(m.CurrentProfileFile); err != nil {
@@ -207,18 +226,75 @@ func (m Manager) Logout() error {
 	return nil
 }
 
-func listProfiles(dirs ...string) ([]string, error) {
+func (m Manager) SetNote(name, note string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("missing profile name")
+	}
+	if !fileExists(filepath.Join(m.ProfileDir, name)) {
+		return fmt.Errorf("profile %q not found", name)
+	}
+
+	notes, err := readProfileNotes(m.NotesFile)
+	if err != nil {
+		return err
+	}
+
+	note, err = validateProfileNote(note)
+	if err != nil {
+		return err
+	}
+
+	if note == "" {
+		delete(notes, name)
+	} else {
+		notes[name] = note
+	}
+
+	if err := writeProfileNotes(m.NotesFile, notes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m Manager) renameNote(oldName, newName string) error {
+	notes, err := readProfileNotes(m.NotesFile)
+	if err != nil {
+		return err
+	}
+
+	note, ok := notes[oldName]
+	if !ok {
+		return nil
+	}
+	delete(notes, oldName)
+	notes[newName] = note
+	return writeProfileNotes(m.NotesFile, notes)
+}
+
+func (m Manager) deleteNote(name string) error {
+	notes, err := readProfileNotes(m.NotesFile)
+	if err != nil {
+		return err
+	}
+	if _, ok := notes[name]; !ok {
+		return nil
+	}
+	delete(notes, name)
+	return writeProfileNotes(m.NotesFile, notes)
+}
+
+func listProfileNames(dirs ...string) ([]string, error) {
 	scan, err := scanProfiles(dirs...)
 	if err != nil {
 		return nil, err
 	}
-	return scan.Profiles, nil
+	return profileNames(scan.Profiles), nil
 }
 
 func scanProfiles(dirs ...string) (profileScan, error) {
 	seen := make(map[string]struct{})
 	seenInvalid := make(map[string]struct{})
-	var profiles []string
+	var profiles []ProfileSummary
 	var invalidProfiles []ProfileIssue
 
 	for _, dir := range dirs {
@@ -254,11 +330,13 @@ func scanProfiles(dirs ...string) (profileScan, error) {
 				continue
 			}
 			seen[name] = struct{}{}
-			profiles = append(profiles, name)
+			profiles = append(profiles, ProfileSummary{Name: name})
 		}
 	}
 
-	sort.Strings(profiles)
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Name < profiles[j].Name
+	})
 	sort.Slice(invalidProfiles, func(i, j int) bool {
 		return invalidProfiles[i].Name < invalidProfiles[j].Name
 	})
@@ -363,7 +441,7 @@ func saveCurrentAuth(authFile, profileDir, name string) error {
 		return fmt.Errorf("profile %q already exists", name)
 	}
 
-	profiles, err := listProfiles(profileDir)
+	profiles, err := listProfileNames(profileDir)
 	if err != nil {
 		return err
 	}
@@ -413,6 +491,100 @@ func renameProfile(profileDir, oldName, newName string) error {
 		return fmt.Errorf("failed to rename profile: %w", err)
 	}
 	return nil
+}
+
+func profileNames(profiles []ProfileSummary) []string {
+	names := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		names = append(names, profile.Name)
+	}
+	return names
+}
+
+func applyProfileNotes(profiles []ProfileSummary, notes map[string]string) {
+	for i := range profiles {
+		profiles[i].Note = notes[profiles[i].Name]
+	}
+}
+
+func readProfileNotes(path string) (map[string]string, error) {
+	if !fileExists(path) {
+		return map[string]string{}, nil
+	}
+
+	data, err := os.ReadFile(path) // #nosec G304 -- notes path is derived from the configured Codex directory.
+	if err != nil {
+		return nil, fmt.Errorf("failed to read profile notes: %w", err)
+	}
+
+	var notes map[string]string
+	if err := json.Unmarshal(data, &notes); err != nil {
+		return nil, fmt.Errorf("failed to parse profile notes: %w", err)
+	}
+	if notes == nil {
+		return map[string]string{}, nil
+	}
+
+	cleaned := make(map[string]string, len(notes))
+	for name, note := range notes {
+		if !isValidProfileName(name) {
+			continue
+		}
+		validated, err := validateProfileNote(note)
+		if err != nil {
+			continue
+		}
+		if validated == "" {
+			continue
+		}
+		cleaned[name] = validated
+	}
+	return cleaned, nil
+}
+
+func writeProfileNotes(path string, notes map[string]string) error {
+	filtered := make(map[string]string, len(notes))
+	for name, note := range notes {
+		if !isValidProfileName(name) {
+			continue
+		}
+		validated, err := validateProfileNote(note)
+		if err != nil {
+			return err
+		}
+		if validated == "" {
+			continue
+		}
+		filtered[name] = validated
+	}
+
+	if len(filtered) == 0 {
+		err := os.Remove(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to clear profile notes: %w", err)
+		}
+		return nil
+	}
+
+	body, err := json.MarshalIndent(filtered, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode profile notes: %w", err)
+	}
+	if err := writeFileAtomically(path, append(body, '\n'), 0o600); err != nil {
+		return fmt.Errorf("failed to write profile notes: %w", err)
+	}
+	return nil
+}
+
+func validateProfileNote(note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return "", nil
+	}
+	if len([]rune(note)) > 255 {
+		return "", errors.New("profile note cannot exceed 255 characters")
+	}
+	return note, nil
 }
 
 func deleteProfile(profileDir, name string) error {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -331,11 +332,99 @@ func TestManagerSnapshotMigratesLegacyConflictKeepingBothProfiles(t *testing.T) 
 	}
 }
 
+func TestManagerSetNotePersistsAndSnapshotReturnsIt(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+
+	if err := m.SetNote("work", "Plus trial ends soon"); err != nil {
+		t.Fatalf("SetNote() error = %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	assertProfiles(t, snapshot.Profiles, []string{"work"})
+	if got := snapshot.Profiles[0].Note; got != "Plus trial ends soon" {
+		t.Fatalf("snapshot note = %q, want %q", got, "Plus trial ends soon")
+	}
+}
+
+func TestManagerSnapshotIgnoresMalformedNotesFile(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+	if err := os.WriteFile(paths.notesFile, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed notes: %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	assertProfiles(t, snapshot.Profiles, []string{"work"})
+	if got := snapshot.Profiles[0].Note; got != "" {
+		t.Fatalf("snapshot note = %q, want empty", got)
+	}
+}
+
+func TestManagerSetNoteRejectsLongValues(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+
+	err := m.SetNote("work", strings.Repeat("x", 256))
+	if err == nil {
+		t.Fatal("SetNote() error = nil, want length error")
+	}
+	if want := "profile note cannot exceed 255 characters"; err.Error() != want {
+		t.Fatalf("SetNote() error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestManagerRenameMovesNote(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "old"), authFixture("account-rename", "api-rename"))
+	writeProfileNotesFile(t, paths.notesFile, map[string]string{"old": "tracked"})
+
+	if err := m.Rename("old", "new", ""); err != nil {
+		t.Fatalf("Rename() error = %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	assertProfiles(t, snapshot.Profiles, []string{"new"})
+	if got := snapshot.Profiles[0].Note; got != "tracked" {
+		t.Fatalf("renamed note = %q, want %q", got, "tracked")
+	}
+}
+
+func TestManagerDeleteRemovesNote(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+	writeProfileNotesFile(t, paths.notesFile, map[string]string{"work": "tracked"})
+
+	if err := m.Delete("work", ""); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	notes, err := readProfileNotes(paths.notesFile)
+	if err != nil {
+		t.Fatalf("readProfileNotes() error = %v", err)
+	}
+	if len(notes) != 0 {
+		t.Fatalf("notes = %#v, want empty", notes)
+	}
+}
+
 type testManagerPaths struct {
 	authFile   string
 	profileDir string
 	legacyDir  string
 	markerFile string
+	notesFile  string
 }
 
 func newTestManager(t *testing.T) (Manager, testManagerPaths) {
@@ -347,6 +436,7 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 		profileDir: filepath.Join(root, "auth_manager", "profiles"),
 		legacyDir:  filepath.Join(root, "auth_manager"),
 		markerFile: filepath.Join(root, "auth_manager", CurrentProfileMarkerName),
+		notesFile:  filepath.Join(root, "auth_manager", profileNotesFileName),
 	}
 
 	for _, dir := range []string{paths.profileDir, paths.legacyDir} {
@@ -360,6 +450,7 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 		ProfileDir:         paths.profileDir,
 		LegacyProfileDir:   paths.legacyDir,
 		CurrentProfileFile: paths.markerFile,
+		NotesFile:          paths.notesFile,
 	}, paths
 }
 
@@ -431,6 +522,18 @@ func writeMarkerFile(t *testing.T, path string, marker currentProfileMarker) {
 	}
 }
 
+func writeProfileNotesFile(t *testing.T, path string, notes map[string]string) {
+	t.Helper()
+
+	data, err := json.Marshal(notes)
+	if err != nil {
+		t.Fatalf("Marshal notes fixture: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
 func makeBlockingDir(t *testing.T, path string) {
 	t.Helper()
 
@@ -478,14 +581,14 @@ func assertDirExists(t *testing.T, path string) {
 	}
 }
 
-func assertProfiles(t *testing.T, got, want []string) {
+func assertProfiles(t *testing.T, got []ProfileSummary, want []string) {
 	t.Helper()
 
 	if len(got) != len(want) {
 		t.Fatalf("profiles = %#v, want %#v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if got[i].Name != want[i] {
 			t.Fatalf("profiles = %#v, want %#v", got, want)
 		}
 	}

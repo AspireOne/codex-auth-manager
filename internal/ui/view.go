@@ -71,12 +71,17 @@ func (m appModel) renderList() string {
 			style = selectedItemStyle
 		}
 
-		label := p
-		if p == m.currentProfile {
+		label := p.Name
+		if p.Name == m.currentProfile {
 			label += currentTag.Render("  • current")
 		}
 
-		lines = append(lines, style.Render(prefix+label))
+		line := style.Render(prefix + label)
+		if p.Note != "" {
+			line += "\n" + footerStyle.Render("    "+p.Note)
+		}
+
+		lines = append(lines, line)
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
@@ -92,6 +97,7 @@ func (m appModel) renderFooter() string {
 		profileCommands := []string{
 			formatKeyHint("↑/↓", "move"),
 			formatKeyHint("enter", "activate"),
+			formatKeyHint("n", "edit note"),
 			formatKeyHint("r", "rename"),
 			formatKeyHint("d", "delete"),
 		}

@@ -24,6 +24,7 @@ const (
 	actionNone action = iota
 	actionSave
 	actionRename
+	actionEditNote
 	actionDelete
 	actionLogout
 	actionActivate
@@ -39,7 +40,7 @@ const (
 type appModel struct {
 	profileManager profilemgr.Manager
 
-	profiles        []string
+	profiles        []profilemgr.ProfileSummary
 	cursor          int
 	invalidProfiles []profilemgr.ProfileIssue
 
@@ -121,11 +122,15 @@ func (m *appModel) activateSelectedProfile(name string) error {
 	return m.reload()
 }
 
-func (m *appModel) selectedProfile() string {
+func (m *appModel) selectedProfile() profilemgr.ProfileSummary {
 	if len(m.profiles) == 0 || m.cursor < 0 || m.cursor >= len(m.profiles) {
-		return ""
+		return profilemgr.ProfileSummary{}
 	}
 	return m.profiles[m.cursor]
+}
+
+func (m *appModel) selectedProfileName() string {
+	return m.selectedProfile().Name
 }
 
 func (m *appModel) setStatus(s string) {
