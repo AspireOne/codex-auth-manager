@@ -10,6 +10,7 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 
 - save the current auth file as a named profile
 - activate another saved profile
+- add a short note to a profile for quick context
 - rename or delete saved profiles
 - log out by removing the active `auth.json`
 
