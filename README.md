@@ -113,3 +113,17 @@ scoop install codex-manage
 ```
 
 (Or `./dist/codex-manage.exe` on Windows)
+
+List saved profiles without opening the TUI:
+
+```sh
+codex-manage --list
+codex-manage -l
+```
+
+Activate a saved profile by name:
+
+```sh
+codex-manage --select work
+codex-manage -s work
+```
