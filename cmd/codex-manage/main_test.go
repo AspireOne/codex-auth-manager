@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -76,6 +77,42 @@ func TestRunSelectActivatesProfile(t *testing.T) {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	assertCLIFileEqual(t, filepath.Join(codexDir, "auth.json"), profilePath)
+	if got := readCLIInstallationID(t, filepath.Join(codexDir, "installation_id")); !uuidV4Pattern.MatchString(got) {
+		t.Fatalf("installation_id = %q, want UUID v4", got)
+	}
+	ids := readCLIInstallationIDs(t, filepath.Join(codexDir, "auth_manager", ".profile-installation-ids.json"))
+	if ids["work"] != readCLIInstallationID(t, filepath.Join(codexDir, "installation_id")) {
+		t.Fatalf("profile installation ID = %q, want active installation_id", ids["work"])
+	}
+}
+
+func TestRunSelectSwitchesInstallationIDByProfile(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
+	writeCLIAuthFile(t, filepath.Join(profileDir, "work"), "acct-work")
+	writeCLIAuthFile(t, filepath.Join(profileDir, "personal"), "acct-personal")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"--select", "work"}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t)); code != 0 {
+		t.Fatalf("run(work) code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	workID := readCLIInstallationID(t, filepath.Join(codexDir, "installation_id"))
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"--select", "personal"}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t)); code != 0 {
+		t.Fatalf("run(personal) code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	personalID := readCLIInstallationID(t, filepath.Join(codexDir, "installation_id"))
+	if personalID == workID {
+		t.Fatalf("installation_id after switching = %q, want different value from %q", personalID, workID)
+	}
 }
 
 func TestRunSelectMissingProfileReturnsError(t *testing.T) {
@@ -194,4 +231,30 @@ func assertCLIFileEqual(t *testing.T, gotPath, wantPath string) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%q content = %q, want %q", gotPath, got, want)
 	}
+}
+
+var uuidV4Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func readCLIInstallationID(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) // #nosec G304 -- test fixture path is under t.TempDir.
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func readCLIInstallationIDs(t *testing.T, path string) map[string]string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) // #nosec G304 -- test fixture path is under t.TempDir.
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	var ids map[string]string
+	if err := json.Unmarshal(data, &ids); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", path, err)
+	}
+	return ids
 }

@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+const testProfileNameWork = "work"
+
 func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *testing.T) {
 	m, paths := newTestManager(t)
 	profileName := "restored"
@@ -41,6 +43,8 @@ func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *test
 	if marker.Name != profileName {
 		t.Fatalf("current profile marker name = %q, want %q", marker.Name, profileName)
 	}
+
+	assertInstallationIDMatchesProfile(t, m, paths, profileName)
 }
 
 func TestManagerSaveCurrentReturnsErrStateChangedAfterProfileIsSaved(t *testing.T) {
@@ -73,6 +77,30 @@ func TestManagerSaveCurrentRejectsDuplicateCredentialsUnderNewName(t *testing.T)
 	assertFileMissing(t, filepath.Join(paths.profileDir, "new-name"))
 }
 
+func TestManagerSaveCurrentAssignsStableInstallationID(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, paths.authFile, authFixture("account-save", "api-save"))
+
+	if err := m.SaveCurrent("saved"); err != nil {
+		t.Fatalf("SaveCurrent() error = %v", err)
+	}
+
+	firstID := assertInstallationIDMatchesProfile(t, m, paths, "saved")
+
+	if err := m.SaveCurrent("saved-again"); err == nil {
+		t.Fatal("SaveCurrent(saved-again) error = nil, want duplicate credentials error")
+	}
+
+	if err := m.Activate("saved"); err != nil {
+		t.Fatalf("Activate(saved) error = %v", err)
+	}
+
+	secondID := readInstallationIDFile(t, paths.installationIDFile)
+	if secondID != firstID {
+		t.Fatalf("installation_id = %q, want stable ID %q", secondID, firstID)
+	}
+}
+
 func TestManagerRenameReturnsErrStateChangedAfterProfileIsRenamed(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "old"), authFixture("account-rename", "api-rename"))
@@ -80,6 +108,7 @@ func TestManagerRenameReturnsErrStateChangedAfterProfileIsRenamed(t *testing.T) 
 		Name:     "old",
 		Identity: authIdentity{AuthMode: "account", AccountID: "account-rename"},
 	})
+	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"old": testInstallationID(1)})
 	makeBlockingDir(t, paths.markerFile)
 
 	err := m.Rename("old", "new", "old")
@@ -94,6 +123,7 @@ func TestManagerRenameReturnsErrStateChangedAfterProfileIsRenamed(t *testing.T) 
 func TestManagerDeleteReturnsErrStateChangedAfterProfileIsDeleted(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "current"), authFixture("account-delete", "api-delete"))
+	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"current": testInstallationID(1)})
 	makeBlockingDir(t, paths.markerFile)
 
 	err := m.Delete("current", "current")
@@ -150,7 +180,7 @@ func TestManagerSyncTrackedProfileDoesNotOverwriteProfileWhenAuthIdentityNoLonge
 
 func TestManagerSyncTrackedProfileCopiesChangedAuthWhenIdentityStillMatches(t *testing.T) {
 	m, paths := newTestManager(t)
-	profileName := "work"
+	profileName := testProfileNameWork
 	profilePath := filepath.Join(paths.profileDir, profileName)
 
 	savedAuth := realisticAuthFixture("acct_same_identity", "session-original", "refresh-original", "https://chatgpt.com/backend-api")
@@ -186,6 +216,8 @@ func TestManagerSyncTrackedProfileCopiesChangedAuthWhenIdentityStillMatches(t *t
 	if !marker.Identity.matches(authIdentity{AuthMode: "account", AccountID: "acct_same_identity"}) {
 		t.Fatalf("marker.Identity = %#v, want matching account identity", marker.Identity)
 	}
+
+	assertInstallationIDMatchesProfile(t, m, paths, profileName)
 }
 
 func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
@@ -252,6 +284,83 @@ func TestManagerSnapshotIgnoresInvalidProfileFiles(t *testing.T) {
 	}
 }
 
+func TestManagerSnapshotClearsInstallationIDWhenAuthIsUnsaved(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, paths.authFile, authFixture("account-custom", "api-custom"))
+	writeInstallationIDFile(t, paths.installationIDFile, testInstallationID(1))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	if snapshot.CurrentProfile != "" {
+		t.Fatalf("Snapshot().CurrentProfile = %q, want empty", snapshot.CurrentProfile)
+	}
+	assertFileMissing(t, paths.installationIDFile)
+}
+
+func TestManagerSnapshotRepairsActiveInstallationIDForTrackedProfile(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, testProfileNameWork), authFixture("account-work", "api-work"))
+	writeAuthFile(t, paths.authFile, authFixture("account-work", "api-work"))
+	writeMarkerFile(t, paths.markerFile, currentProfileMarker{
+		Name:     testProfileNameWork,
+		Identity: authIdentity{AuthMode: "account", AccountID: "account-work"},
+	})
+	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{testProfileNameWork: testInstallationID(2)})
+	writeInstallationIDFile(t, paths.installationIDFile, testInstallationID(1))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	if snapshot.CurrentProfile != testProfileNameWork {
+		t.Fatalf("Snapshot().CurrentProfile = %q, want work", snapshot.CurrentProfile)
+	}
+	if got := readInstallationIDFile(t, paths.installationIDFile); got != testInstallationID(2) {
+		t.Fatalf("installation_id = %q, want %q", got, testInstallationID(2))
+	}
+}
+
+func TestManagerSnapshotIgnoresMalformedInstallationIDsFile(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, testProfileNameWork), authFixture("account-work", "api-work"))
+	writeAuthFile(t, paths.authFile, authFixture("account-work", "api-work"))
+	writeMarkerFile(t, paths.markerFile, currentProfileMarker{
+		Name:     testProfileNameWork,
+		Identity: authIdentity{AuthMode: "account", AccountID: "account-work"},
+	})
+	if err := os.WriteFile(paths.installationIDsFile, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed installation IDs: %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	if snapshot.CurrentProfile != testProfileNameWork {
+		t.Fatalf("Snapshot().CurrentProfile = %q, want work", snapshot.CurrentProfile)
+	}
+	assertInstallationIDMatchesProfile(t, m, paths, testProfileNameWork)
+}
+
+func TestManagerActivateRecoversFromMalformedInstallationIDsFile(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, testProfileNameWork), authFixture("account-work", "api-work"))
+	if err := os.WriteFile(paths.installationIDsFile, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed installation IDs: %v", err)
+	}
+
+	if err := m.Activate(testProfileNameWork); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+
+	assertInstallationIDMatchesProfile(t, m, paths, testProfileNameWork)
+}
+
 func TestManagerSetNotePersistsAndSnapshotReturnsIt(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
@@ -306,6 +415,7 @@ func TestManagerRenameMovesNote(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "old"), authFixture("account-rename", "api-rename"))
 	writeProfileNotesFile(t, paths.notesFile, map[string]string{"old": "tracked"})
+	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"old": testInstallationID(1)})
 
 	if err := m.Rename("old", "new", ""); err != nil {
 		t.Fatalf("Rename() error = %v", err)
@@ -319,12 +429,20 @@ func TestManagerRenameMovesNote(t *testing.T) {
 	if got := snapshot.Profiles[0].Note; got != "tracked" {
 		t.Fatalf("renamed note = %q, want %q", got, "tracked")
 	}
+	ids := readInstallationIDsFile(t, paths.installationIDsFile)
+	if got := ids["new"]; got != testInstallationID(1) {
+		t.Fatalf("installation ID for new = %q, want %q", got, testInstallationID(1))
+	}
+	if _, ok := ids["old"]; ok {
+		t.Fatalf("installation IDs still contain old key: %#v", ids)
+	}
 }
 
 func TestManagerDeleteRemovesNote(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
 	writeProfileNotesFile(t, paths.notesFile, map[string]string{"work": "tracked"})
+	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"work": testInstallationID(1)})
 
 	if err := m.Delete("work", ""); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -337,13 +455,16 @@ func TestManagerDeleteRemovesNote(t *testing.T) {
 	if len(notes) != 0 {
 		t.Fatalf("notes = %#v, want empty", notes)
 	}
+	assertFileMissing(t, paths.installationIDsFile)
 }
 
 type testManagerPaths struct {
-	authFile   string
-	profileDir string
-	markerFile string
-	notesFile  string
+	authFile            string
+	installationIDFile  string
+	profileDir          string
+	markerFile          string
+	notesFile           string
+	installationIDsFile string
 }
 
 func newTestManager(t *testing.T) (Manager, testManagerPaths) {
@@ -351,10 +472,12 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 
 	root := t.TempDir()
 	paths := testManagerPaths{
-		authFile:   filepath.Join(root, "auth.json"),
-		profileDir: filepath.Join(root, "auth_manager", "profiles"),
-		markerFile: filepath.Join(root, "auth_manager", CurrentProfileMarkerName),
-		notesFile:  filepath.Join(root, "auth_manager", profileNotesFileName),
+		authFile:            filepath.Join(root, "auth.json"),
+		installationIDFile:  filepath.Join(root, "installation_id"),
+		profileDir:          filepath.Join(root, "auth_manager", "profiles"),
+		markerFile:          filepath.Join(root, "auth_manager", CurrentProfileMarkerName),
+		notesFile:           filepath.Join(root, "auth_manager", profileNotesFileName),
+		installationIDsFile: filepath.Join(root, "auth_manager", profileInstallationIDsFileName),
 	}
 
 	for _, dir := range []string{paths.profileDir, filepath.Dir(paths.markerFile)} {
@@ -364,10 +487,12 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 	}
 
 	return Manager{
-		AuthFile:           paths.authFile,
-		ProfileDir:         paths.profileDir,
-		CurrentProfileFile: paths.markerFile,
-		NotesFile:          paths.notesFile,
+		AuthFile:            paths.authFile,
+		InstallationIDFile:  paths.installationIDFile,
+		ProfileDir:          paths.profileDir,
+		CurrentProfileFile:  paths.markerFile,
+		NotesFile:           paths.notesFile,
+		InstallationIDsFile: paths.installationIDsFile,
 	}, paths
 }
 
@@ -451,6 +576,26 @@ func writeProfileNotesFile(t *testing.T, path string, notes map[string]string) {
 	}
 }
 
+func writeInstallationIDsFile(t *testing.T, path string, ids map[string]string) {
+	t.Helper()
+
+	data, err := json.Marshal(ids)
+	if err != nil {
+		t.Fatalf("Marshal installation IDs fixture: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func writeInstallationIDFile(t *testing.T, path, value string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(value)+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
 func makeBlockingDir(t *testing.T, path string) {
 	t.Helper()
 
@@ -509,4 +654,52 @@ func assertProfiles(t *testing.T, got []ProfileSummary, want []string) {
 			t.Fatalf("profiles = %#v, want %#v", got, want)
 		}
 	}
+}
+
+func readInstallationIDFile(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) // #nosec G304 -- test fixture path is created under t.TempDir.
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func readInstallationIDsFile(t *testing.T, path string) map[string]string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) // #nosec G304 -- test fixture path is created under t.TempDir.
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	var ids map[string]string
+	if err := json.Unmarshal(data, &ids); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", path, err)
+	}
+	return ids
+}
+
+func assertInstallationIDMatchesProfile(t *testing.T, m Manager, paths testManagerPaths, profileName string) string {
+	t.Helper()
+
+	id := readInstallationIDFile(t, paths.installationIDFile)
+	if err := validateInstallationID(id); err != nil {
+		t.Fatalf("installation_id = %q, want UUID v4: %v", id, err)
+	}
+	ids := readInstallationIDsFile(t, paths.installationIDsFile)
+	if got := ids[profileName]; got != id {
+		t.Fatalf("installation IDs[%q] = %q, want %q", profileName, got, id)
+	}
+	if _, err := m.ensureProfileInstallationID(profileName); err != nil {
+		t.Fatalf("ensureProfileInstallationID(%q): %v", profileName, err)
+	}
+	return id
+}
+
+func testInstallationID(n int) string {
+	return []string{
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000002",
+	}[n-1]
 }

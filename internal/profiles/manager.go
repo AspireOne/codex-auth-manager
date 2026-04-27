@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 
 const CurrentProfileMarkerName = "current-profile"
 const profileNotesFileName = ".profile-notes.json"
+const profileInstallationIDsFileName = ".profile-installation-ids.json"
 
 const invalidJSONReason = "invalid JSON"
 
@@ -37,10 +39,12 @@ type ProfileIssue struct {
 }
 
 type Manager struct {
-	AuthFile           string
-	ProfileDir         string
-	CurrentProfileFile string
-	NotesFile          string
+	AuthFile            string
+	InstallationIDFile  string
+	ProfileDir          string
+	CurrentProfileFile  string
+	NotesFile           string
+	InstallationIDsFile string
 }
 
 var (
@@ -75,10 +79,12 @@ type currentProfileMarker struct {
 func NewManager(codexDir string) Manager {
 	managerDir := filepath.Join(codexDir, "auth_manager")
 	return Manager{
-		AuthFile:           filepath.Join(codexDir, "auth.json"),
-		ProfileDir:         filepath.Join(managerDir, "profiles"),
-		CurrentProfileFile: filepath.Join(managerDir, CurrentProfileMarkerName),
-		NotesFile:          filepath.Join(managerDir, profileNotesFileName),
+		AuthFile:            filepath.Join(codexDir, "auth.json"),
+		InstallationIDFile:  filepath.Join(codexDir, "installation_id"),
+		ProfileDir:          filepath.Join(managerDir, "profiles"),
+		CurrentProfileFile:  filepath.Join(managerDir, CurrentProfileMarkerName),
+		NotesFile:           filepath.Join(managerDir, profileNotesFileName),
+		InstallationIDsFile: filepath.Join(managerDir, profileInstallationIDsFileName),
 	}
 }
 
@@ -103,6 +109,9 @@ func (m Manager) Snapshot() (Snapshot, error) {
 		AuthActive:      fileExists(m.AuthFile),
 	}
 	if !snapshot.AuthActive {
+		if err := clearInstallationID(m.InstallationIDFile); err != nil {
+			return Snapshot{}, err
+		}
 		return snapshot, nil
 	}
 
@@ -111,6 +120,9 @@ func (m Manager) Snapshot() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	snapshot.CurrentProfile = marker.Name
+	if err := m.syncActiveInstallationID(marker); err != nil {
+		return Snapshot{}, err
+	}
 	return snapshot, nil
 }
 
@@ -129,10 +141,13 @@ func (m Manager) SyncTrackedProfile() error {
 		return err
 	}
 	if marker.Name == "" {
-		return nil
+		return clearInstallationID(m.InstallationIDFile)
 	}
 
-	return syncProfileFromAuth(m.AuthFile, m.ProfileDir, marker)
+	if err := syncProfileFromAuth(m.AuthFile, m.ProfileDir, marker); err != nil {
+		return err
+	}
+	return m.syncActiveInstallationID(marker)
 }
 
 func (m Manager) Activate(name string) error {
@@ -152,6 +167,9 @@ func (m Manager) Activate(name string) error {
 		_ = clearCurrentProfileMarker(m.CurrentProfileFile)
 		return fmt.Errorf("activated profile %q, but failed to track it: %v", name, err)
 	}
+	if err := m.setActiveInstallationIDForProfile(name); err != nil {
+		return fmt.Errorf("%w: activated profile %q, but failed to write installation_id: %v", ErrStateChanged, name, err)
+	}
 
 	return nil
 }
@@ -167,6 +185,9 @@ func (m Manager) SaveCurrent(name string) error {
 	if err := writeCurrentProfileMarker(m.CurrentProfileFile, marker); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
+	if err := m.setActiveInstallationIDForProfile(name); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
 	return nil
 }
 
@@ -175,6 +196,9 @@ func (m Manager) Rename(oldName, newName, currentProfile string) error {
 		return err
 	}
 	if err := m.renameNote(oldName, newName); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
+	if err := m.renameInstallationID(oldName, newName); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	if currentProfile != oldName {
@@ -187,6 +211,9 @@ func (m Manager) Rename(oldName, newName, currentProfile string) error {
 	if err := writeCurrentProfileMarker(m.CurrentProfileFile, marker); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
+	if err := m.setActiveInstallationIDForProfile(newName); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
 	return nil
 }
 
@@ -197,8 +224,14 @@ func (m Manager) Delete(name, currentProfile string) error {
 	if err := m.deleteNote(name); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
+	if err := m.deleteInstallationID(name); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
 	if currentProfile == name {
 		if err := clearCurrentProfileMarker(m.CurrentProfileFile); err != nil {
+			return fmt.Errorf("%w: %w", ErrStateChanged, err)
+		}
+		if err := clearInstallationID(m.InstallationIDFile); err != nil {
 			return fmt.Errorf("%w: %w", ErrStateChanged, err)
 		}
 	}
@@ -213,6 +246,9 @@ func (m Manager) Logout() error {
 		return err
 	}
 	if err := clearCurrentProfileMarker(m.CurrentProfileFile); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
+	if err := clearInstallationID(m.InstallationIDFile); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	return nil
@@ -273,6 +309,70 @@ func (m Manager) deleteNote(name string) error {
 	}
 	delete(notes, name)
 	return writeProfileNotes(m.NotesFile, notes)
+}
+
+func (m Manager) syncActiveInstallationID(marker currentProfileMarker) error {
+	if strings.TrimSpace(marker.Name) == "" {
+		return clearInstallationID(m.InstallationIDFile)
+	}
+	return m.setActiveInstallationIDForProfile(marker.Name)
+}
+
+func (m Manager) setActiveInstallationIDForProfile(name string) error {
+	id, err := m.ensureProfileInstallationID(name)
+	if err != nil {
+		return err
+	}
+	return writeInstallationID(m.InstallationIDFile, id)
+}
+
+func (m Manager) ensureProfileInstallationID(name string) (string, error) {
+	ids, err := readProfileInstallationIDs(m.InstallationIDsFile)
+	if err != nil {
+		return "", err
+	}
+
+	if id := strings.TrimSpace(ids[name]); id != "" {
+		if err := validateInstallationID(id); err == nil {
+			return id, nil
+		}
+	}
+
+	id, err := generateInstallationID()
+	if err != nil {
+		return "", err
+	}
+	ids[name] = id
+	if err := writeProfileInstallationIDs(m.InstallationIDsFile, ids); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (m Manager) renameInstallationID(oldName, newName string) error {
+	ids, err := readProfileInstallationIDs(m.InstallationIDsFile)
+	if err != nil {
+		return err
+	}
+	id, ok := ids[oldName]
+	if !ok {
+		return nil
+	}
+	delete(ids, oldName)
+	ids[newName] = id
+	return writeProfileInstallationIDs(m.InstallationIDsFile, ids)
+}
+
+func (m Manager) deleteInstallationID(name string) error {
+	ids, err := readProfileInstallationIDs(m.InstallationIDsFile)
+	if err != nil {
+		return err
+	}
+	if _, ok := ids[name]; !ok {
+		return nil
+	}
+	delete(ids, name)
+	return writeProfileInstallationIDs(m.InstallationIDsFile, ids)
 }
 
 func listProfileNames(dirs ...string) ([]string, error) {
@@ -564,6 +664,142 @@ func writeProfileNotes(path string, notes map[string]string) error {
 	}
 	if err := writeFileAtomically(path, append(body, '\n'), 0o600); err != nil {
 		return fmt.Errorf("failed to write profile notes: %w", err)
+	}
+	return nil
+}
+
+func readProfileInstallationIDs(path string) (map[string]string, error) {
+	if !fileExists(path) {
+		return map[string]string{}, nil
+	}
+
+	data, err := os.ReadFile(path) // #nosec G304 -- metadata path is derived from the configured Codex directory.
+	if err != nil {
+		return nil, fmt.Errorf("failed to read profile installation IDs: %w", err)
+	}
+
+	var ids map[string]string
+	if err := json.Unmarshal(data, &ids); err != nil {
+		return map[string]string{}, nil
+	}
+	if ids == nil {
+		return map[string]string{}, nil
+	}
+
+	cleaned := make(map[string]string, len(ids))
+	for name, id := range ids {
+		if !isValidProfileName(name) {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if err := validateInstallationID(id); err != nil {
+			continue
+		}
+		cleaned[name] = id
+	}
+	return cleaned, nil
+}
+
+func writeProfileInstallationIDs(path string, ids map[string]string) error {
+	filtered := make(map[string]string, len(ids))
+	for name, id := range ids {
+		if !isValidProfileName(name) {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if err := validateInstallationID(id); err != nil {
+			return err
+		}
+		filtered[name] = id
+	}
+
+	if len(filtered) == 0 {
+		err := os.Remove(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to clear profile installation IDs: %w", err)
+		}
+		return nil
+	}
+
+	body, err := json.MarshalIndent(filtered, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode profile installation IDs: %w", err)
+	}
+	if err := writeFileAtomically(path, append(body, '\n'), 0o600); err != nil {
+		return fmt.Errorf("failed to write profile installation IDs: %w", err)
+	}
+	return nil
+}
+
+func writeInstallationID(path, id string) error {
+	if err := validateInstallationID(id); err != nil {
+		return err
+	}
+	if err := writeFileAtomically(path, []byte(id+"\n"), 0o600); err != nil {
+		return fmt.Errorf("failed to write installation_id: %w", err)
+	}
+	return nil
+}
+
+func clearInstallationID(path string) error {
+	err := os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to clear installation_id: %w", err)
+	}
+	return nil
+}
+
+func generateInstallationID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("failed to generate installation ID: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4],
+		b[4:6],
+		b[6:8],
+		b[8:10],
+		b[10:16],
+	), nil
+}
+
+func validateInstallationID(value string) error {
+	value = strings.TrimSpace(value)
+	if len(value) != 36 {
+		return errors.New("installation ID must be a UUID v4")
+	}
+	for _, idx := range []int{8, 13, 18, 23} {
+		if value[idx] != '-' {
+			return errors.New("installation ID must be a UUID v4")
+		}
+	}
+	if value[14] != '4' {
+		return errors.New("installation ID must be a UUID v4")
+	}
+	switch value[19] {
+	case '8', '9', 'a', 'b', 'A', 'B':
+	default:
+		return errors.New("installation ID must be a UUID v4")
+	}
+	for i, r := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return errors.New("installation ID must be a UUID v4")
+		}
 	}
 	return nil
 }
