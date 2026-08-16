@@ -181,7 +181,7 @@ func (m Manager) ensurePrivateStorage() error {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("failed to create auth manager directory: %w", err)
 		}
-		if err := os.Chmod(dir, 0o700); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // Directories require execute permission for traversal.
 			return fmt.Errorf("failed to secure auth manager directory %s: %w", dir, err)
 		}
 	}
@@ -767,11 +767,12 @@ func resolveProfileLabels(profiles []ProfileSummary) {
 		}
 		for _, indexes := range collisions {
 			for _, i := range indexes {
-				if suffixLengths[i] == 0 {
+				switch {
+				case suffixLengths[i] == 0:
 					suffixLengths[i] = 8
-				} else if suffixLengths[i] < sha256.Size*2 {
+				case suffixLengths[i] < sha256.Size*2:
 					suffixLengths[i] += 4
-				} else {
+				default:
 					profiles[i].Label = roots[i] + " · " + profileDiscriminator(profiles[i]) + " · " + base64.RawURLEncoding.EncodeToString([]byte(profiles[i].Key))
 					continue
 				}

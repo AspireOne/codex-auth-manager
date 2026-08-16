@@ -87,26 +87,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.cycleSelectedPlan(), nil
 
 	case "s":
-		if !m.authActive {
-			m.setError("No active auth.json to save.")
-			return m, nil
-		}
-		if m.currentProfileKey != "" {
-			if err := m.syncTrackedProfile(); err != nil {
-				m.setError(err.Error())
-				return m, nil
-			}
-			if err := m.reload(); err != nil {
-				m.setError(err.Error())
-				return m, nil
-			}
-			m.setInfo(fmt.Sprintf("%q is already saved.", m.currentAuth.Label))
-			return m, nil
-		}
-		if m.currentAuth.Kind == profilemgr.AuthKindAPIKey {
-			return m.enterInput(actionSave, "API key label (optional; blank uses fingerprint):", "")
-		}
-		return m.saveCurrent(""), nil
+		return m.saveActiveAuth()
 
 	case "d":
 		if len(m.profiles) == 0 {
@@ -156,6 +137,29 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m appModel) saveActiveAuth() (tea.Model, tea.Cmd) {
+	if !m.authActive {
+		m.setError("No active auth.json to save.")
+		return m, nil
+	}
+	if m.currentProfileKey != "" {
+		if err := m.syncTrackedProfile(); err != nil {
+			m.setError(err.Error())
+			return m, nil
+		}
+		if err := m.reload(); err != nil {
+			m.setError(err.Error())
+			return m, nil
+		}
+		m.setInfo(fmt.Sprintf("%q is already saved.", m.currentAuth.Label))
+		return m, nil
+	}
+	if m.currentAuth.Kind == profilemgr.AuthKindAPIKey {
+		return m.enterInput(actionSave, "API key label (optional; blank uses fingerprint):", "")
+	}
+	return m.saveCurrent(""), nil
 }
 
 func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {

@@ -188,6 +188,7 @@ func TestValidateProfileLabelTrimsAndCountsUnicodeCharacters(t *testing.T) {
 func TestManagerAPIKeyLabelDefaultsToFingerprintAndCanBeEditedOrReset(t *testing.T) {
 	m, paths := newTestManager(t)
 	const key = "sk-test-secret"
+	const customLabel = "Personal project"
 	writeAuthFile(t, filepath.Join(paths.profileDir, "legacy-api-name"), apiKeyAuthFixture(key))
 
 	snapshot, err := m.Snapshot()
@@ -200,14 +201,14 @@ func TestManagerAPIKeyLabelDefaultsToFingerprintAndCanBeEditedOrReset(t *testing
 		t.Fatalf("profile = %#v, want default API fingerprint", got)
 	}
 
-	if err := m.SetLabel("legacy-api-name", "Personal project"); err != nil {
+	if err := m.SetLabel("legacy-api-name", customLabel); err != nil {
 		t.Fatalf("SetLabel() error = %v", err)
 	}
 	snapshot, err = m.Snapshot()
 	if err != nil {
 		t.Fatalf("Snapshot() after label error = %v", err)
 	}
-	if got := snapshot.Profiles[0]; got.Label != "Personal project" || got.CustomLabel != "Personal project" {
+	if got := snapshot.Profiles[0]; got.Label != customLabel || got.CustomLabel != customLabel {
 		t.Fatalf("profile = %#v, want custom API label", got)
 	}
 
@@ -523,7 +524,7 @@ func TestManagerSnapshotSecuresExistingDirectoriesAndManagedFiles(t *testing.T) 
 		"world-readable-api": {Label: "Permissions test"},
 	})
 	for _, path := range []string{filepath.Dir(paths.profileDir), paths.profileDir, profilePath, paths.authFile, paths.metadataFile} {
-		if err := os.Chmod(path, 0o777); err != nil {
+		if err := os.Chmod(path, 0o777); err != nil { //nolint:gosec // The test verifies normalization of deliberately unsafe permissions.
 			t.Fatalf("Chmod(%q): %v", path, err)
 		}
 	}
