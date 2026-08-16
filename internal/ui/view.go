@@ -102,7 +102,7 @@ func (m appModel) renderList() string {
 func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
 	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Rem.", "Resets at", "Auth", "Cache"}
+	headings := []string{"Rem.", "Resets at", "Auth", "Data"}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
 		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
@@ -242,7 +242,7 @@ func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {
 }
 
 func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Rem.", "Resets at", "Auth", "Cache"}
+	headings := []string{"Rem.", "Resets at", "Auth", "Data"}
 	widths := make([]int, len(headings))
 	for i, heading := range headings {
 		widths[i] = lipgloss.Width(heading)
