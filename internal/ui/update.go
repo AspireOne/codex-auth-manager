@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/profilestatus"
 )
 
 const (
@@ -40,6 +41,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case startStatusMsg:
+		return m, m.dispatchStatusFetches()
+
+	case statusFetchFinishedMsg:
+		return m.handleStatusFetchFinished(msg)
+
 	case authenticationFinishedMsg:
 		if m.mode != modeAuthenticating || msg.profileKey != m.authProfileKey {
 			return m, nil
@@ -47,21 +54,28 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authCancel = nil
 		m.authProfileKey = ""
 		m.mode = modeNormal
+		m.statusPaused = false
 		if msg.err != nil {
+			if m.profileManager.ProfileDir != "" {
+				if err := m.reload(); err != nil {
+					m.setError(err.Error())
+					return m, m.dispatchStatusFetches()
+				}
+			}
 			if errors.Is(msg.err, context.Canceled) {
 				m.setInfo("Authentication cancelled. No credentials changed.")
-				return m, nil
+				return m, m.dispatchStatusFetches()
 			}
 			if errors.Is(msg.err, profilemgr.ErrStateChanged) {
 				m = m.reloadAndExitWithError(msg.err)
-				return m, nil
+				return m, m.dispatchStatusFetches()
 			}
 			m.setError(msg.err.Error())
-			return m, nil
+			return m, m.dispatchStatusFetches()
 		}
 		if err := m.reload(); err != nil {
 			m.setError(err.Error())
-			return m, nil
+			return m, m.dispatchStatusFetches()
 		}
 		m.cursor = indexOfProfile(m.profiles, msg.profileKey)
 		if m.cursor < 0 {
@@ -69,7 +83,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setStatus(fmt.Sprintf("Authenticated and activated profile %q.", msg.label))
 		m.restartRequired = true
-		return m, nil
+		return m, m.dispatchStatusFetches()
 
 	case tea.KeyPressMsg:
 		switch m.mode {
@@ -92,6 +106,51 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m appModel) handleStatusFetchFinished(msg statusFetchFinishedMsg) (tea.Model, tea.Cmd) {
+	if msg.epoch != m.statusEpoch {
+		return m, nil
+	}
+	if cancel, ok := m.statusCancels[msg.profileKey]; ok {
+		cancel()
+		delete(m.statusCancels, msg.profileKey)
+	}
+	index := indexOfProfile(m.profiles, msg.profileKey)
+	if index < 0 || m.profiles[index].Kind != profilemgr.AuthKindChatGPT {
+		return m, m.dispatchStatusFetches()
+	}
+
+	switch {
+	case msg.err == nil:
+		if err := m.profileManager.SaveProfileStatus(msg.profileKey, msg.status); err != nil {
+			view := m.profileStatuses[msg.profileKey]
+			view.phase = statusFailed
+			view.stale = view.status != nil
+			m.profileStatuses[msg.profileKey] = view
+		} else {
+			copy := msg.status
+			m.profileStatuses[msg.profileKey] = profileStatusView{status: &copy, phase: statusCached}
+		}
+	case errors.Is(msg.err, profilestatus.ErrSignInRequired):
+		status := profilemgr.ProfileStatus{FetchedAt: m.now().UTC(), AuthStatus: profilemgr.ProfileAuthSignInRequired}
+		if err := m.profileManager.SaveProfileStatus(msg.profileKey, status); err != nil {
+			view := m.profileStatuses[msg.profileKey]
+			view.phase = statusFailed
+			view.stale = view.status != nil
+			m.profileStatuses[msg.profileKey] = view
+		} else {
+			m.profileStatuses[msg.profileKey] = profileStatusView{status: &status, phase: statusCached}
+		}
+	case errors.Is(msg.err, context.Canceled):
+		// Re-authentication and shutdown cancel status work intentionally.
+	default:
+		view := m.profileStatuses[msg.profileKey]
+		view.phase = statusFailed
+		view.stale = view.status != nil
+		m.profileStatuses[msg.profileKey] = view
+	}
+	return m, m.dispatchStatusFetches()
+}
+
 func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -100,6 +159,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.quitting = true
+		m.cancelStatusFetches()
 		return m, tea.Quit
 
 	case "up", "k":
@@ -124,7 +184,8 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.startAuthentication()
 
 	case "p":
-		return m.cycleSelectedPlan(), nil
+		m = m.cycleSelectedPlan()
+		return m, m.dispatchStatusFetches()
 
 	case "s":
 		return m.saveActiveAuth()
@@ -161,7 +222,8 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.authActive && m.currentProfileKey == "" {
 			return m.enterConfirm(actionActivate, fmt.Sprintf("Current auth is not saved as a profile. Replace it with %q? [y/N]", selected.Label)), nil
 		}
-		return m.activateProfile(selected.Key), nil
+		m = m.activateProfile(selected.Key)
+		return m, m.dispatchStatusFetches()
 
 	case "F5", "ctrl+r":
 		if err := m.syncTrackedProfile(); err != nil {
@@ -173,7 +235,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setStatus("Refreshed.")
-		return m, m.updateCheckCmd()
+		return m, tea.Batch(m.updateCheckCmd(), m.dispatchStatusFetches())
 	}
 
 	return m, nil
@@ -190,6 +252,8 @@ func (m appModel) startAuthentication() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	m.statusPaused = true
+	m.cancelStatusFetches()
 	m.mode = modeAuthenticating
 	m.authCancel = cancel
 	m.authProfileKey = profile.Key
@@ -224,12 +288,13 @@ func (m appModel) saveActiveAuth() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setInfo(fmt.Sprintf("%q is already saved.", m.currentAuth.Label))
-		return m, nil
+		return m, m.dispatchStatusFetches()
 	}
 	if m.currentAuth.Kind == profilemgr.AuthKindAPIKey {
 		return m.enterInput(actionSave, "API key label (optional; blank uses fingerprint):", "")
 	}
-	return m.saveCurrent(""), nil
+	m = m.saveCurrent("")
+	return m, m.dispatchStatusFetches()
 }
 
 func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -245,7 +310,8 @@ func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.exitMode(), nil
 			case actionSave:
 				m = m.saveCurrent(value)
-				return m.exitMode(), nil
+				m = m.exitMode()
+				return m, m.dispatchStatusFetches()
 
 			case actionEditLabel:
 				selected := m.selectedProfile()
@@ -261,7 +327,8 @@ func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor = 0
 				}
 				m.setStatus(fmt.Sprintf("Updated API key label to %q.", m.selectedProfile().Label))
-				return m.exitMode(), nil
+				m = m.exitMode()
+				return m, m.dispatchStatusFetches()
 			case actionEditNote:
 				selected := m.selectedProfile()
 				if err := m.profileManager.SetNote(selected.Key, value); err != nil {
@@ -276,7 +343,8 @@ func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.setStatus(fmt.Sprintf("Updated note for %q.", selected.Label))
 				}
-				return m.exitMode(), nil
+				m = m.exitMode()
+				return m, m.dispatchStatusFetches()
 			}
 			return m.exitMode(), nil
 		}
@@ -298,7 +366,8 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.exitMode(), nil
 		case actionActivate:
 			m = m.activateProfile(m.selectedProfileKey())
-			return m.exitMode(), nil
+			m = m.exitMode()
+			return m, m.dispatchStatusFetches()
 		case actionDelete:
 			selected := m.selectedProfile()
 			if err := m.profileManager.Delete(selected.Key, m.currentProfileKey); err != nil {
@@ -312,7 +381,8 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.cursor--
 			}
 			m.setStatus(fmt.Sprintf("Deleted profile %q.", selected.Label))
-			return m.exitMode(), nil
+			m = m.exitMode()
+			return m, m.dispatchStatusFetches()
 
 		case actionLogout:
 			if err := m.profileManager.Logout(); err != nil {
@@ -324,7 +394,8 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.setStatus("Logged out.")
 			m.restartRequired = true
-			return m.exitMode(), nil
+			m = m.exitMode()
+			return m, m.dispatchStatusFetches()
 		}
 	}
 

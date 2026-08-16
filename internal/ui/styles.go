@@ -44,6 +44,10 @@ var (
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 
+	mutedStatusStyle = lipgloss.NewStyle().
+				Foreground(mutedColor).
+				Faint(true)
+
 	keyHintStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(mutedColor)

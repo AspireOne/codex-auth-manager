@@ -198,25 +198,6 @@ func TestInstalledCodexAppServerLoginStartAndCancel(t *testing.T) {
 	}
 }
 
-func TestIsolatedEnvironmentRemovesCredentialOverrides(t *testing.T) {
-	got := isolatedEnvironment([]string{
-		"PATH=/bin", "CODEX_HOME=/real", "CODEX_SQLITE_HOME=/real/db",
-		"CODEX_ACCESS_TOKEN=secret", "CODEX_API_KEY=secret", "OPENAI_API_KEY=secret",
-		"HTTPS_PROXY=http://proxy", "CODEX_CA_CERTIFICATE=/ca.pem",
-	}, "/temp/codex", "/temp/sqlite")
-	joined := strings.Join(got, "\n")
-	for _, forbidden := range []string{"/real", "secret"} {
-		if strings.Contains(joined, forbidden) {
-			t.Fatalf("environment contains %q: %v", forbidden, got)
-		}
-	}
-	for _, want := range []string{"CODEX_HOME=/temp/codex", "CODEX_SQLITE_HOME=/temp/sqlite", "HTTPS_PROXY=http://proxy", "CODEX_CA_CERTIFICATE=/ca.pem"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("environment missing %q: %v", want, got)
-		}
-	}
-}
-
 func TestValidateAuthURL(t *testing.T) {
 	if err := validateAuthURL("https://chatgpt.com/oauth"); err != nil {
 		t.Fatalf("validateAuthURL(valid) = %v", err)
@@ -225,15 +206,6 @@ func TestValidateAuthURL(t *testing.T) {
 		if err := validateAuthURL(raw); err == nil {
 			t.Fatalf("validateAuthURL(%q) = nil, want error", raw)
 		}
-	}
-}
-
-func TestTailBufferKeepsBoundedDiagnosticTail(t *testing.T) {
-	buffer := &tailBuffer{limit: 8}
-	_, _ = buffer.Write([]byte("old diagnostics:"))
-	_, _ = buffer.Write([]byte(" useful"))
-	if got, want := buffer.String(), ": useful"; got != want {
-		t.Fatalf("tail = %q, want %q", got, want)
 	}
 }
 

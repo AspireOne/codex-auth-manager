@@ -22,6 +22,7 @@ const CurrentProfileMarkerName = "current-profile"
 const profileMetadataFileName = ".profile-metadata.json"
 const profileNotesFileName = ".profile-notes.json"
 const profileInstallationIDsFileName = ".profile-installation-ids.json"
+const profileStatusCacheFileName = ".profile-status-cache.json"
 
 const invalidJSONReason = "invalid JSON"
 
@@ -118,6 +119,7 @@ type Manager struct {
 	MetadataFile        string
 	LegacyNotesFile     string
 	InstallationIDsFile string
+	StatusCacheFile     string
 }
 
 var (
@@ -172,6 +174,7 @@ func NewManager(codexDir string) Manager {
 		MetadataFile:        filepath.Join(managerDir, profileMetadataFileName),
 		LegacyNotesFile:     filepath.Join(managerDir, profileNotesFileName),
 		InstallationIDsFile: filepath.Join(managerDir, profileInstallationIDsFileName),
+		StatusCacheFile:     filepath.Join(managerDir, profileStatusCacheFileName),
 	}
 }
 
@@ -193,6 +196,7 @@ func (m Manager) ensurePrivateStorage() error {
 		m.MetadataFile,
 		m.LegacyNotesFile,
 		m.InstallationIDsFile,
+		m.StatusCacheFile,
 	}
 	entries, err := os.ReadDir(m.ProfileDir)
 	if err != nil {
@@ -356,6 +360,9 @@ func (m Manager) ReplaceAndActivate(name, authPath string) error {
 	if err := copyFile(authPath, targetPath); err != nil {
 		return fmt.Errorf("failed to update profile %q: %w", name, err)
 	}
+	if err := m.InvalidateProfileStatus(name); err != nil {
+		return fmt.Errorf("%w: updated profile %q, but failed to invalidate its status cache: %v", ErrStateChanged, name, err)
+	}
 	if err := copyFile(authPath, m.AuthFile); err != nil {
 		return fmt.Errorf("%w: updated profile %q, but failed to activate it: %v", ErrStateChanged, name, err)
 	}
@@ -422,6 +429,9 @@ func (m Manager) SaveCurrent(label string) error {
 func (m Manager) Delete(name, currentProfile string) error {
 	if err := deleteProfile(m.ProfileDir, name); err != nil {
 		return err
+	}
+	if err := m.InvalidateProfileStatus(name); err != nil {
+		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	if err := m.deleteMetadata(name); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)

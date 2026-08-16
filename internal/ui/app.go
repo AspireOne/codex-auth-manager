@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/profilestatus"
 	"codex-manage/internal/reauth"
 	"codex-manage/internal/updatecheck"
 )
@@ -47,6 +49,7 @@ const (
 type appModel struct {
 	profileManager profilemgr.Manager
 	authenticator  reauth.Authenticator
+	statusFetcher  profilestatus.Fetcher
 
 	profiles        []profilemgr.ProfileSummary
 	cursor          int
@@ -73,6 +76,13 @@ type appModel struct {
 	authCancel      context.CancelFunc
 	authProfileKey  string
 
+	profileStatuses map[string]profileStatusView
+	statusQueue     []string
+	statusCancels   map[string]context.CancelFunc
+	statusPaused    bool
+	statusEpoch     int
+	now             func() time.Time
+
 	quitting bool
 }
 
@@ -86,6 +96,31 @@ type authenticationFinishedMsg struct {
 	label      string
 	err        error
 }
+
+type startStatusMsg struct{}
+
+type statusFetchFinishedMsg struct {
+	profileKey string
+	epoch      int
+	status     profilemgr.ProfileStatus
+	err        error
+}
+
+type statusPhase int
+
+const (
+	statusLoading statusPhase = iota
+	statusCached
+	statusFailed
+)
+
+type profileStatusView struct {
+	status *profilemgr.ProfileStatus
+	phase  statusPhase
+	stale  bool
+}
+
+const profileStatusTTL = 30 * time.Minute
 
 func Run(version string) error {
 	home, err := os.UserHomeDir()
@@ -109,10 +144,14 @@ func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
 	manager := profilemgr.NewManager(codexDir)
 	return appModel{
-		profileManager: manager,
-		authenticator:  reauth.New(manager),
-		textInput:      newTextInput(),
-		status:         "Ready.",
+		profileManager:  manager,
+		authenticator:   reauth.New(manager),
+		statusFetcher:   profilestatus.New(manager),
+		profileStatuses: make(map[string]profileStatusView),
+		statusCancels:   make(map[string]context.CancelFunc),
+		now:             time.Now,
+		textInput:       newTextInput(),
+		status:          "Ready.",
 	}
 }
 
@@ -139,7 +178,7 @@ func newTextInput() textinput.Model {
 }
 
 func (m appModel) Init() tea.Cmd {
-	return m.updateCheckCmd()
+	return tea.Batch(m.updateCheckCmd(), func() tea.Msg { return startStatusMsg{} })
 }
 
 func (m *appModel) reload() error {
@@ -165,7 +204,92 @@ func (m *appModel) reload() error {
 	m.authActive = snapshot.AuthActive
 	m.currentProfileKey = snapshot.CurrentProfileKey
 	m.currentAuth = snapshot.CurrentAuth
+	if m.profileStatuses == nil {
+		m.profileStatuses = make(map[string]profileStatusView)
+	}
+	if m.statusCancels == nil {
+		m.statusCancels = make(map[string]context.CancelFunc)
+	}
+	if m.now == nil {
+		m.now = time.Now
+	}
+	valid := make(map[string]profilemgr.AuthKind, len(m.profiles))
+	for _, profile := range m.profiles {
+		valid[profile.Key] = profile.Kind
+	}
+	cached, err := m.profileManager.LoadProfileStatuses(valid, m.now())
+	if err != nil {
+		return err
+	}
+	m.statusQueue = m.statusQueue[:0]
+	seen := make(map[string]struct{}, len(m.profiles))
+	for _, profile := range m.profiles {
+		if profile.Kind != profilemgr.AuthKindChatGPT {
+			delete(m.profileStatuses, profile.Key)
+			continue
+		}
+		seen[profile.Key] = struct{}{}
+		status, exists := cached[profile.Key]
+		fresh := exists && m.now().Sub(status.FetchedAt) < profileStatusTTL
+		if exists {
+			copy := status
+			phase := statusCached
+			if !fresh {
+				phase = statusLoading
+			}
+			m.profileStatuses[profile.Key] = profileStatusView{status: &copy, phase: phase, stale: !fresh}
+		} else {
+			m.profileStatuses[profile.Key] = profileStatusView{phase: statusLoading}
+		}
+		if !fresh {
+			if _, running := m.statusCancels[profile.Key]; !running {
+				m.statusQueue = append(m.statusQueue, profile.Key)
+			}
+		}
+	}
+	for key := range m.profileStatuses {
+		if _, ok := seen[key]; !ok {
+			delete(m.profileStatuses, key)
+		}
+	}
 	return nil
+}
+
+func (m appModel) statusFetchCmd(ctx context.Context, epoch int, profile profilemgr.ProfileSummary) tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.statusFetcher.Fetch(ctx, profile)
+		return statusFetchFinishedMsg{profileKey: profile.Key, epoch: epoch, status: status, err: err}
+	}
+}
+
+func (m *appModel) dispatchStatusFetches() tea.Cmd {
+	if m.statusPaused || m.statusFetcher == nil {
+		return nil
+	}
+	var commands []tea.Cmd
+	for len(m.statusCancels) < 2 && len(m.statusQueue) > 0 {
+		key := m.statusQueue[0]
+		m.statusQueue = m.statusQueue[1:]
+		index := indexOfProfile(m.profiles, key)
+		if index < 0 || m.profiles[index].Kind != profilemgr.AuthKindChatGPT {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		m.statusCancels[key] = cancel
+		view := m.profileStatuses[key]
+		view.phase = statusLoading
+		m.profileStatuses[key] = view
+		commands = append(commands, m.statusFetchCmd(ctx, m.statusEpoch, m.profiles[index]))
+	}
+	return tea.Batch(commands...)
+}
+
+func (m *appModel) cancelStatusFetches() {
+	m.statusEpoch++
+	for key, cancel := range m.statusCancels {
+		cancel()
+		delete(m.statusCancels, key)
+	}
 }
 
 func (m *appModel) syncTrackedProfile() error {

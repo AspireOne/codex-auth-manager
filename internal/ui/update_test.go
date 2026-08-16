@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -19,6 +20,14 @@ import (
 
 type fakeUIAuthenticator struct {
 	run func(context.Context, profilemgr.ProfileSummary) error
+}
+
+type fakeStatusFetcher struct {
+	run func(context.Context, profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error)
+}
+
+func (f fakeStatusFetcher) Fetch(ctx context.Context, profile profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error) {
+	return f.run(ctx, profile)
 }
 
 func (a fakeUIAuthenticator) Reauthenticate(ctx context.Context, profile profilemgr.ProfileSummary) error {
@@ -1169,6 +1178,74 @@ func TestFooterIncludesCyclePlanHint(t *testing.T) {
 		if got := lipgloss.Width(line); got > 80 {
 			t.Fatalf("footer line width = %d, want at most 80: %q", got, line)
 		}
+	}
+}
+
+func TestStatusSchedulerUsesFreshCacheAndLimitsConcurrency(t *testing.T) {
+	home := t.TempDir()
+	for index, name := range []string{"one@example.com", "two@example.com", "three@example.com"} {
+		writeUIProfile(t, home, name, fmt.Sprintf("acct-%d", index))
+	}
+	m := newAppModel(home)
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	percent := 20
+	reset := now.Add(time.Hour)
+	if err := m.profileManager.SaveProfileStatus(m.profiles[0].Key, profilemgr.ProfileStatus{
+		FetchedAt: now.Add(-time.Minute), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+		UsedPercent: &percent, ResetsAt: &reset,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.statusQueue) != 2 {
+		t.Fatalf("status queue length = %d, want 2 stale/missing profiles", len(m.statusQueue))
+	}
+	m.statusFetcher = fakeStatusFetcher{run: func(ctx context.Context, _ profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error) {
+		<-ctx.Done()
+		return profilemgr.ProfileStatus{}, ctx.Err()
+	}}
+	if cmd := m.dispatchStatusFetches(); cmd == nil {
+		t.Fatal("dispatchStatusFetches() = nil")
+	}
+	if len(m.statusCancels) != 2 {
+		t.Fatalf("in-flight count = %d, want 2", len(m.statusCancels))
+	}
+	m.cancelStatusFetches()
+}
+
+func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
+	percent := 57
+	reset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	m := appModel{
+		width: 200,
+		profiles: []profilemgr.ProfileSummary{
+			{Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus},
+			{Key: "api", Label: "API", Kind: profilemgr.AuthKindAPIKey, Plan: profilemgr.PlanFree},
+		},
+		profileStatuses: map[string]profileStatusView{
+			"chat": {status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}, phase: statusCached},
+		},
+	}
+	rendered := stripANSI(m.renderList())
+	for _, want := range []string{"57% used", "resets at 2026-08-16 15:30", "Authenticated", "Cached"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
+		}
+	}
+	apiLine := ""
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "API") {
+			apiLine = line
+		}
+	}
+	if strings.Contains(apiLine, "% used") || strings.Contains(apiLine, "Cached") {
+		t.Fatalf("API-key row contains ChatGPT status: %q", apiLine)
 	}
 }
 

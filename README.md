@@ -12,6 +12,7 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 - save API-key auth with an optional label or automatic fingerprint
 - activate another saved profile
 - re-authenticate an existing ChatGPT profile in its own browser session
+- see cached ChatGPT quota usage, reset time, and authentication status
 - assign Free, Plus, or Pro plans with paid plans grouped first
 - add a short note to a profile for quick context
 - edit API-key labels or delete saved profiles
@@ -188,6 +189,14 @@ Existing `codex-browser` data and its legacy environment variables (`CODEX_BRAVE
 Normal `codex login` and Codex TUI `/login` remain untouched: `codex-manage` does not set or export `$BROWSER`.
 
 If you previously sourced `codex-login.zsh` from `codex-browser`, you can stop sourcing it after moving to `codex-manage --login`; no browser data migration is required.
+
+## ChatGPT usage status
+
+ChatGPT profile rows show the shortest Codex quota window as `N% used`, its local reset time, authentication status, and cache state. API-key profiles remain local-only and do not make status requests.
+
+Status comes from the installed `codex` CLI's App Server, so `codex` must be available on `PATH`. Results are cached for 30 minutes in `~/.codex/auth_manager/.profile-status-cache.json`. Fresh entries show `Cached` and make no request. Expired entries remain visible in a muted color while `Loading`; failures retain cached values as `Cached · failed`. Missing data uses `x`/`Unknown`, and an explicit credential rejection shows `Sign-in required`.
+
+Status refreshes only when the TUI starts or reloads its profiles; there is no timer or force-refresh action. `Ctrl+R` respects the same 30-minute cache. Re-authenticating a profile invalidates its entry and triggers a new status request.
 
 ChatGPT labels come from the email claim in `auth.json`; if it is unavailable, the UI shows a shortened account ID. API-key profiles use an optional custom label and otherwise show a non-secret SHA-256 fingerprint. Profile filenames are opaque internal keys and are not accepted by `--select`.
 

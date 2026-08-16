@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -91,25 +92,44 @@ func (m appModel) renderList() string {
 			style = selectedItemStyle
 		}
 
-		lines = append(lines, m.renderProfileLine(style, prefix, p.Label, p.Note, p.Plan, p.Key == m.currentProfileKey, profileColumnWidth))
+		lines = append(lines, m.renderProfileLineWithStatus(style, prefix, p, p.Key == m.currentProfileKey, profileColumnWidth))
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
 }
 
 func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
-	base := m.renderProfileCell(style, prefix, label, isCurrent, profileColumnWidth) + "  " + renderPlan(plan)
-	note = strings.TrimSpace(note)
-	if note == "" {
+	profile := profilemgr.ProfileSummary{Label: label, Note: note, Plan: plan}
+	return m.renderProfileLineWithStatus(style, prefix, profile, isCurrent, profileColumnWidth)
+}
+
+func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix string, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int) string {
+	base := m.renderProfileCell(style, prefix, profile.Label, isCurrent, profileColumnWidth) + "  " + renderPlan(profile.Plan)
+	trailing := strings.TrimSpace(profile.Note)
+	if profile.Kind == profilemgr.AuthKindChatGPT {
+		status := m.renderProfileStatus(profile.Key)
+		if trailing != "" {
+			trailing = status + "  " + trailing
+		} else {
+			trailing = status
+		}
+	}
+	if trailing == "" {
 		return base
 	}
 
 	separator := "  "
 	noteStyle := footerStyle
-	continuationIndent := strings.Repeat(" ", lipgloss.Width(base)+lipgloss.Width(separator))
+	if profile.Kind == profilemgr.AuthKindChatGPT {
+		noteStyle = lipgloss.NewStyle()
+		if m.profileStatuses[profile.Key].stale {
+			noteStyle = mutedStatusStyle
+		}
+	}
+	continuationIndent := "    "
 	availableWidth := m.listContentWidth()
 	if availableWidth <= 0 {
-		return base + noteStyle.Render(separator+note)
+		return base + noteStyle.Render(separator+trailing)
 	}
 
 	firstLineWidth := availableWidth - lipgloss.Width(base) - lipgloss.Width(separator)
@@ -121,7 +141,7 @@ func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note st
 		continuationWidth = 12
 	}
 
-	wrapped := wrapWords(note, firstLineWidth, continuationWidth)
+	wrapped := wrapWords(trailing, firstLineWidth, continuationWidth)
 	if len(wrapped) == 0 {
 		return base
 	}
@@ -131,6 +151,40 @@ func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note st
 		line += "\n" + noteStyle.Render(continuationIndent+part)
 	}
 	return line
+}
+
+func (m appModel) renderProfileStatus(key string) string {
+	view, ok := m.profileStatuses[key]
+	if !ok {
+		view = profileStatusView{phase: statusLoading}
+	}
+	usage := "x% used (resets at x)"
+	auth := "Unknown"
+	if view.status != nil {
+		if view.status.UsedPercent != nil && view.status.ResetsAt != nil {
+			usage = fmt.Sprintf("%d%% used (resets at %s)", *view.status.UsedPercent, view.status.ResetsAt.In(time.Local).Format("2006-01-02 15:04"))
+		}
+		switch view.status.AuthStatus {
+		case profilemgr.ProfileAuthAuthenticated:
+			auth = "Authenticated"
+		case profilemgr.ProfileAuthSignInRequired:
+			auth = "Sign-in required"
+		}
+	}
+	cache := "Loading"
+	switch view.phase {
+	case statusLoading:
+		cache = "Loading"
+	case statusCached:
+		cache = "Cached"
+	case statusFailed:
+		if view.status != nil {
+			cache = "Cached · failed"
+		} else {
+			cache = "Unavailable · failed"
+		}
+	}
+	return usage + "  " + auth + "  " + cache
 }
 
 func renderPlan(plan profilemgr.Plan) string {
