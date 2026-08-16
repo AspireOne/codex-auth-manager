@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -402,12 +403,14 @@ func TestManagerSnapshotMigratesLegacyNotes(t *testing.T) {
 	}
 	assertFileMissing(t, paths.legacyNotesFile)
 	assertFileExists(t, paths.metadataFile)
-	info, err := os.Stat(paths.metadataFile)
-	if err != nil {
-		t.Fatalf("Stat metadata: %v", err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("metadata mode = %o, want 600", got)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(paths.metadataFile)
+		if err != nil {
+			t.Fatalf("Stat metadata: %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("metadata mode = %o, want 600", got)
+		}
 	}
 }
 
