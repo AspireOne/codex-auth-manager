@@ -139,6 +139,10 @@ func (s *Service) Reauthenticate(ctx context.Context, profile profilemgr.Profile
 		_ = client.cancelLogin(started.LoginID)
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = client.cancelLogin(started.LoginID)
+		return fmt.Errorf("authentication cancelled: %w", err)
+	}
 	if err := s.browser.Open(profile, started.AuthURL); err != nil {
 		_ = client.cancelLogin(started.LoginID)
 		return fmt.Errorf("failed to open authentication browser: %w", err)
@@ -153,6 +157,9 @@ func (s *Service) Reauthenticate(ctx context.Context, profile profilemgr.Profile
 			return errors.New("codex reported a successful login but did not write auth.json")
 		}
 		return fmt.Errorf("failed to read isolated login result: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("authentication cancelled: %w", err)
 	}
 	if err := s.manager.ReplaceAndActivate(profile.Key, tempAuth); err != nil {
 		return fmt.Errorf("failed to install refreshed credentials: %w", err)

@@ -20,11 +20,15 @@ import (
 type fakeBrowser struct {
 	opened chan string
 	err    error
+	onOpen func()
 }
 
 func (b fakeBrowser) Open(_ profilemgr.ProfileSummary, authURL string) error {
 	if b.opened != nil {
 		b.opened <- authURL
+	}
+	if b.onOpen != nil {
+		b.onOpen()
 	}
 	return b.err
 }
@@ -99,6 +103,20 @@ func TestServiceReauthenticateCancellationPreservesCredentials(t *testing.T) {
 	}
 	if _, err := os.Stat(manager.AuthFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("live auth exists after cancellation: %v", err)
+	}
+}
+
+func TestServiceCancellationAfterBrowserLaunchPreventsInstallation(t *testing.T) {
+	service, manager, profile := newTestService(t, "success", "acct-work")
+	ctx, cancel := context.WithCancel(context.Background())
+	service.browser = fakeBrowser{onOpen: cancel}
+
+	err := service.Reauthenticate(ctx, profile)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reauthenticate() error = %v, want context cancellation", err)
+	}
+	if _, statErr := os.Stat(manager.AuthFile); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("live auth exists after cancellation: %v", statErr)
 	}
 }
 
