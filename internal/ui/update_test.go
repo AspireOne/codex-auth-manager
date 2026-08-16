@@ -93,6 +93,24 @@ func TestSkippedUpdateCheckStaysNeutral(t *testing.T) {
 	}
 }
 
+func TestBrowserStatusMessageDescribesBrowserOrUnavailable(t *testing.T) {
+	m := newAppModel(t.TempDir())
+	updatedModel, _ := m.Update(browserStatusMsg{name: "Brave"})
+	updated := updatedModel.(appModel)
+	if updated.browserAuthStatus != "Brave · isolated profiles" {
+		t.Fatalf("browserAuthStatus = %q", updated.browserAuthStatus)
+	}
+	if header := stripANSI(updated.renderHeader()); !strings.Contains(header, "Browser auth:     Brave · isolated profiles") {
+		t.Fatalf("header is missing browser status:\n%s", header)
+	}
+
+	updatedModel, _ = updated.Update(browserStatusMsg{err: errors.New("not found")})
+	updated = updatedModel.(appModel)
+	if updated.browserAuthStatus != "unavailable" {
+		t.Fatalf("browserAuthStatus = %q, want unavailable", updated.browserAuthStatus)
+	}
+}
+
 func TestRenderHeaderIncludesUpdateNotice(t *testing.T) {
 	m := appModel{
 		updateChecked: true,
@@ -1128,6 +1146,7 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 	writeUIProfile(t, home, "z-plus", "acct-plus-z")
 	writeUIProfile(t, home, "a-plus", "acct-plus-a")
 	writeUIProfile(t, home, "a-free", "acct-free")
+	writeUIAPIProfile(t, home, "api-free")
 	writeUIMetadata(t, home, `{
   "z-pro": {"plan": "pro"},
   "z-plus": {"plan": "plus"},
@@ -1139,7 +1158,7 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 
-	want := []string{"z-pro", "a-plus", "z-plus", "a-free"}
+	want := []string{"z-pro", "a-plus", "z-plus", "a-free", "api-free"}
 	for i, name := range want {
 		if got := m.profiles[i].Key; got != name {
 			t.Fatalf("profiles[%d].Key = %q, want %q; profiles=%#v", i, got, name, m.profiles)
@@ -1522,6 +1541,17 @@ func writeUIProfile(t *testing.T, home, name, accountID string) {
 	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, name)))
 	body := fmt.Sprintf(`{"auth_mode":"account","tokens":{"account_id":%q,"id_token":%q}}`, accountID, "header."+payload+".signature")
 	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+}
+
+func writeUIAPIProfile(t *testing.T, home, name string) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "auth_manager", "profiles", name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-ui-test"}`+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile profile: %v", err)
 	}
 }

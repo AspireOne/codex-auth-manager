@@ -39,6 +39,12 @@ type browserSelection struct {
 	windows    bool
 }
 
+// BrowserName reports the Chromium browser that would be used for browser-based
+// re-authentication without opening it or creating a profile directory.
+func BrowserName() (string, error) {
+	return newBrowserLauncher().selectedBrowserName()
+}
+
 func newBrowserLauncher() *browserLauncher {
 	return &browserLauncher{
 		goos: runtime.GOOS, getenv: os.Getenv, homeDir: os.UserHomeDir,
@@ -110,6 +116,14 @@ func (b *browserLauncher) resolveBrowser() (browserSelection, error) {
 		}
 	}
 	return browserSelection{}, errors.New("no supported Chromium browser found; set " + browserExecutableEnv)
+}
+
+func (b *browserLauncher) selectedBrowserName() (string, error) {
+	browser, err := b.resolveBrowser()
+	if err != nil {
+		return "", err
+	}
+	return strings.ToUpper(browser.name[:1]) + browser.name[1:], nil
 }
 
 func (b *browserLauncher) explicitBrowser(value string) (browserSelection, error) {

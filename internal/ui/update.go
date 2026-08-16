@@ -41,6 +41,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case browserStatusMsg:
+		if msg.err != nil {
+			m.browserAuthStatus = "unavailable"
+			return m, nil
+		}
+		m.browserAuthStatus = msg.name + " · isolated profiles"
+		return m, nil
+
 	case startStatusMsg:
 		return m, m.dispatchStatusFetches()
 

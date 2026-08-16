@@ -55,9 +55,9 @@ func (m appModel) renderHeader() string {
 		headerTitle.Render("Codex Auth Manager"),
 		"",
 		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
-		fmt.Sprintf("Auth status:     %s", currentTag.Render(authState)),
+		fmt.Sprintf("Profile status:  %s", currentTag.Render(authState)),
 		m.renderUpdateLine(),
-		fmt.Sprintf("Saved profiles:  %s", headerValue.Render(fmt.Sprintf("%d", len(m.profiles)))),
+		fmt.Sprintf("Browser auth:     %s", footerStyle.Render(m.browserAuthStatus)),
 		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileManager.ProfileDir)),
 	)
 

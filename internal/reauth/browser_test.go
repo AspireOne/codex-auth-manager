@@ -36,6 +36,24 @@ func TestBrowserDetectionOrder(t *testing.T) {
 	}
 }
 
+func TestSelectedBrowserName(t *testing.T) {
+	browser := testBrowserLauncher(t)
+	browser.lookPath = func(name string) (string, error) {
+		if name == "brave-browser" {
+			return "/browser/brave", nil
+		}
+		return "", errors.New("missing")
+	}
+
+	name, err := browser.selectedBrowserName()
+	if err != nil {
+		t.Fatalf("selectedBrowserName() error = %v", err)
+	}
+	if name != "Brave" {
+		t.Fatalf("selectedBrowserName() = %q, want Brave", name)
+	}
+}
+
 func TestBrowserEnvironmentOverridePrecedence(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "custom-browser")
 	if err := os.WriteFile(executable, nil, 0o600); err != nil {

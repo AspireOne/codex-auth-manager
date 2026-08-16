@@ -50,6 +50,7 @@ type appModel struct {
 	profileManager profilemgr.Manager
 	authenticator  reauth.Authenticator
 	statusFetcher  profilestatus.Fetcher
+	browserChecker func() (string, error)
 
 	profiles        []profilemgr.ProfileSummary
 	cursor          int
@@ -61,6 +62,7 @@ type appModel struct {
 	appVersion        string
 	updateChecked     bool
 	updateNotice      string
+	browserAuthStatus string
 
 	width  int
 	height int
@@ -89,6 +91,11 @@ type appModel struct {
 type updateCheckMsg struct {
 	result updatecheck.Result
 	err    error
+}
+
+type browserStatusMsg struct {
+	name string
+	err  error
 }
 
 type authenticationFinishedMsg struct {
@@ -144,14 +151,16 @@ func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
 	manager := profilemgr.NewManager(codexDir)
 	return appModel{
-		profileManager:  manager,
-		authenticator:   reauth.New(manager),
-		statusFetcher:   profilestatus.New(manager),
-		profileStatuses: make(map[string]profileStatusView),
-		statusCancels:   make(map[string]context.CancelFunc),
-		now:             time.Now,
-		textInput:       newTextInput(),
-		status:          "Ready.",
+		profileManager:    manager,
+		authenticator:     reauth.New(manager),
+		statusFetcher:     profilestatus.New(manager),
+		browserChecker:    reauth.BrowserName,
+		browserAuthStatus: "checking…",
+		profileStatuses:   make(map[string]profileStatusView),
+		statusCancels:     make(map[string]context.CancelFunc),
+		now:               time.Now,
+		textInput:         newTextInput(),
+		status:            "Ready.",
 	}
 }
 
@@ -178,7 +187,7 @@ func newTextInput() textinput.Model {
 }
 
 func (m appModel) Init() tea.Cmd {
-	return tea.Batch(m.updateCheckCmd(), func() tea.Msg { return startStatusMsg{} })
+	return tea.Batch(m.updateCheckCmd(), m.browserStatusCmd(), func() tea.Msg { return startStatusMsg{} })
 }
 
 func (m *appModel) reload() error {
@@ -188,6 +197,9 @@ func (m *appModel) reload() error {
 	}
 	m.profiles = snapshot.Profiles
 	sort.SliceStable(m.profiles, func(i, j int) bool {
+		if m.profiles[i].Kind != m.profiles[j].Kind {
+			return m.profiles[i].Kind != profilemgr.AuthKindAPIKey
+		}
 		if m.profiles[i].Plan.Rank() != m.profiles[j].Plan.Rank() {
 			return m.profiles[i].Plan.Rank() < m.profiles[j].Plan.Rank()
 		}
@@ -405,5 +417,15 @@ func (m appModel) updateCheckCmd() tea.Cmd {
 	return func() tea.Msg {
 		result, err := updatecheck.New().Check(context.Background(), m.appVersion)
 		return updateCheckMsg{result: result, err: err}
+	}
+}
+
+func (m appModel) browserStatusCmd() tea.Cmd {
+	if m.browserChecker == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		name, err := m.browserChecker()
+		return browserStatusMsg{name: name, err: err}
 	}
 }
