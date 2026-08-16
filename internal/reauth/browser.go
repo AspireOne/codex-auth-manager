@@ -19,6 +19,7 @@ const (
 	browserProfilesEnv   = "CODEX_MANAGE_BROWSER_PROFILES_DIR"
 	legacyBraveEnv       = "CODEX_BRAVE_EXE"
 	legacyProfilesEnv    = "CODEX_BROWSER_PROFILES_DIR"
+	windowsOS            = "windows"
 )
 
 type browserLauncher struct {
@@ -35,6 +36,7 @@ type browserLauncher struct {
 type browserSelection struct {
 	executable string
 	name       string
+	windows    bool
 }
 
 func newBrowserLauncher() *browserLauncher {
@@ -69,7 +71,7 @@ func (b *browserLauncher) Open(profile profilemgr.ProfileSummary, authURL string
 		return fmt.Errorf("failed to create browser profile directory: %w", err)
 	}
 	browserDirectory := filepath.Join(browserRoot, directory)
-	if b.isWSL() {
+	if b.isWSL() && browser.windows {
 		browserDirectory, err = b.wslPath(hostDirectory, "-w")
 		if err != nil {
 			return fmt.Errorf("failed to convert browser profile path for Windows: %w", err)
@@ -99,12 +101,12 @@ func (b *browserLauncher) resolveBrowser() (browserSelection, error) {
 	for _, candidate := range b.browserCandidates() {
 		if candidate.path {
 			if info, err := b.stat(candidate.value); err == nil && !info.IsDir() {
-				return browserSelection{executable: candidate.value, name: candidate.name}, nil
+				return browserSelection{executable: candidate.value, name: candidate.name, windows: candidate.windows}, nil
 			}
 			continue
 		}
 		if executable, err := b.lookPath(candidate.value); err == nil {
-			return browserSelection{executable: executable, name: candidate.name}, nil
+			return browserSelection{executable: executable, name: candidate.name, windows: candidate.windows}, nil
 		}
 	}
 	return browserSelection{}, errors.New("no supported Chromium browser found; set " + browserExecutableEnv)
@@ -112,6 +114,7 @@ func (b *browserLauncher) resolveBrowser() (browserSelection, error) {
 
 func (b *browserLauncher) explicitBrowser(value string) (browserSelection, error) {
 	executable := value
+	windowsBrowser := b.goos == windowsOS
 	if !strings.ContainsAny(value, `/\\`) {
 		resolved, err := b.lookPath(value)
 		if err != nil {
@@ -128,25 +131,29 @@ func (b *browserLauncher) explicitBrowser(value string) (browserSelection, error
 	if info, err := b.stat(executable); err != nil || info.IsDir() {
 		return browserSelection{}, fmt.Errorf("browser executable %q does not exist", value)
 	}
-	return browserSelection{executable: executable, name: browserName(value)}, nil
+	if b.isWSL() && (isWindowsPath(value) || isWSLMountPath(executable)) {
+		windowsBrowser = true
+	}
+	return browserSelection{executable: executable, name: browserName(value), windows: windowsBrowser}, nil
 }
 
 type browserCandidate struct {
-	name  string
-	value string
-	path  bool
+	name    string
+	value   string
+	path    bool
+	windows bool
 }
 
 func (b *browserLauncher) browserCandidates() []browserCandidate {
 	if b.goos == "darwin" {
 		return []browserCandidate{
-			{"brave", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", true},
-			{"chromium", "/Applications/Chromium.app/Contents/MacOS/Chromium", true},
-			{"chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", true},
-			{"edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", true},
+			{name: "brave", value: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", path: true},
+			{name: "chromium", value: "/Applications/Chromium.app/Contents/MacOS/Chromium", path: true},
+			{name: "chrome", value: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", path: true},
+			{name: "edge", value: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", path: true},
 		}
 	}
-	if b.goos == "windows" || b.isWSL() {
+	if b.goos == windowsOS || b.isWSL() {
 		local := b.getenv("LOCALAPPDATA")
 		programFiles := b.getenv("PROGRAMFILES")
 		programFilesX86 := b.getenv("PROGRAMFILES(X86)")
@@ -156,14 +163,14 @@ func (b *browserLauncher) browserCandidates() []browserCandidate {
 			programFilesX86 = b.windowsEnvironment("ProgramFiles(x86)")
 		}
 		paths := []browserCandidate{
-			{"brave", filepath.Join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), true},
-			{"brave", filepath.Join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), true},
-			{"chromium", filepath.Join(local, "Chromium", "Application", "chrome.exe"), true},
-			{"chrome", filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"), true},
-			{"chrome", filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"), true},
-			{"chrome", filepath.Join(local, "Google", "Chrome", "Application", "chrome.exe"), true},
-			{"edge", filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"), true},
-			{"edge", filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), true},
+			{name: "brave", value: filepath.Join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), path: true, windows: true},
+			{name: "brave", value: filepath.Join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), path: true, windows: true},
+			{name: "chromium", value: filepath.Join(local, "Chromium", "Application", "chrome.exe"), path: true, windows: true},
+			{name: "chrome", value: filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
+			{name: "chrome", value: filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
+			{name: "chrome", value: filepath.Join(local, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
+			{name: "edge", value: filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"), path: true, windows: true},
+			{name: "edge", value: filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), path: true, windows: true},
 		}
 		if b.isWSL() {
 			for i := range paths {
@@ -175,40 +182,43 @@ func (b *browserLauncher) browserCandidates() []browserCandidate {
 		return paths
 	}
 	return []browserCandidate{
-		{"brave", "brave-browser", false}, {"brave", "brave", false},
-		{"chromium", "chromium", false}, {"chromium", "chromium-browser", false},
-		{"chrome", "google-chrome", false}, {"chrome", "google-chrome-stable", false},
-		{"edge", "microsoft-edge", false}, {"edge", "microsoft-edge-stable", false},
+		{name: "brave", value: "brave-browser"}, {name: "brave", value: "brave"},
+		{name: "chromium", value: "chromium"}, {name: "chromium", value: "chromium-browser"},
+		{name: "chrome", value: "google-chrome"}, {name: "chrome", value: "google-chrome-stable"},
+		{name: "edge", value: "microsoft-edge"}, {name: "edge", value: "microsoft-edge-stable"},
 	}
 }
 
 func (b *browserLauncher) resolveProfileRoot(browser browserSelection) (string, string, error) {
 	for _, env := range []string{browserProfilesEnv, legacyProfilesEnv} {
 		if value := strings.TrimSpace(b.getenv(env)); value != "" {
-			return b.normalizeProfileRoot(value)
+			return b.normalizeProfileRoot(value, browser.windows)
 		}
 	}
 
-	legacyHost, legacyBrowser, err := b.legacyProfileRoot()
+	legacyHost, legacyBrowser, err := b.legacyProfileRoot(browser.windows)
 	if err != nil {
 		return "", "", err
 	}
 	if directoryExists(legacyHost) {
 		return legacyHost, legacyBrowser, nil
 	}
-	return b.managedProfileRoot(browser.name)
+	return b.managedProfileRoot(browser.name, browser.windows)
 }
 
-func (b *browserLauncher) normalizeProfileRoot(value string) (string, string, error) {
+func (b *browserLauncher) normalizeProfileRoot(value string, windowsBrowser bool) (string, string, error) {
 	if b.isWSL() && isWindowsPath(value) {
 		host, err := b.wslPath(value, "-u")
-		return host, value, err
+		if windowsBrowser {
+			return host, value, err
+		}
+		return host, host, err
 	}
 	return value, value, nil
 }
 
-func (b *browserLauncher) legacyProfileRoot() (string, string, error) {
-	if b.isWSL() {
+func (b *browserLauncher) legacyProfileRoot(windowsBrowser bool) (string, string, error) {
+	if b.isWSL() && windowsBrowser {
 		windowsRoot := filepath.Join(b.windowsEnvironment("USERPROFILE"), ".codex-browser-profiles")
 		host, err := b.wslPath(windowsRoot, "-u")
 		return host, windowsRoot, err
@@ -221,13 +231,13 @@ func (b *browserLauncher) legacyProfileRoot() (string, string, error) {
 	return root, root, nil
 }
 
-func (b *browserLauncher) managedProfileRoot(browser string) (string, string, error) {
-	if b.isWSL() {
+func (b *browserLauncher) managedProfileRoot(browser string, windowsBrowser bool) (string, string, error) {
+	if b.isWSL() && windowsBrowser {
 		windowsRoot := filepath.Join(b.windowsEnvironment("LOCALAPPDATA"), "codex-manage", "browser-profiles", browser)
 		host, err := b.wslPath(windowsRoot, "-u")
 		return host, windowsRoot, err
 	}
-	if b.goos == "windows" {
+	if b.goos == windowsOS {
 		root := filepath.Join(b.getenv("LOCALAPPDATA"), "codex-manage", "browser-profiles", browser)
 		return root, root, nil
 	}
@@ -337,4 +347,10 @@ func isWindowsPath(value string) bool {
 		return false
 	}
 	return parsed.Scheme != "" && len(parsed.Scheme) == 1
+}
+
+func isWSLMountPath(value string) bool {
+	clean := filepath.ToSlash(filepath.Clean(value))
+	return len(clean) > len("/mnt/c/") && strings.HasPrefix(clean, "/mnt/") &&
+		((clean[5] >= 'a' && clean[5] <= 'z') || (clean[5] >= 'A' && clean[5] <= 'Z')) && clean[6] == '/'
 }

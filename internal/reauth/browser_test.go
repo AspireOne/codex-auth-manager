@@ -107,7 +107,7 @@ func TestManagedProfileRootDefaults(t *testing.T) {
 		}
 		return ""
 	}
-	host, browserPath, err := browser.managedProfileRoot("brave")
+	host, browserPath, err := browser.managedProfileRoot("brave", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,51 @@ func TestManagedProfileRootDefaults(t *testing.T) {
 
 func TestWSLBrowserReceivesWindowsProfilePath(t *testing.T) {
 	root := t.TempDir()
-	executable := filepath.Join(t.TempDir(), "browser.exe")
+	fixtureExecutable := filepath.Join(t.TempDir(), "browser.exe")
+	if err := os.WriteFile(fixtureExecutable, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixtureInfo, err := os.Stat(fixtureExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotArgs []string
+	browser := testBrowserLauncher(t)
+	browser.readFile = func(string) ([]byte, error) { return []byte("microsoft-standard-WSL2"), nil }
+	browser.getenv = func(name string) string {
+		switch name {
+		case browserExecutableEnv:
+			return "/mnt/c/fixture/browser.exe"
+		case browserProfilesEnv:
+			return root
+		default:
+			return ""
+		}
+	}
+	browser.stat = func(string) (os.FileInfo, error) { return fixtureInfo, nil }
+	browser.output = func(name string, args ...string) ([]byte, error) {
+		if name == "wslpath" && len(args) == 2 && args[0] == "-w" {
+			return []byte(`C:\Users\person\profile` + "\n"), nil
+		}
+		return nil, errors.New("unexpected conversion")
+	}
+	browser.command = func(_ string, args ...string) *exec.Cmd {
+		gotArgs = append([]string(nil), args...)
+		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204 -- test helper invocation.
+	}
+
+	err = browser.Open(profilemgr.ProfileSummary{Key: "chatgpt-stable", Label: "person@example.com"}, "https://chatgpt.com/oauth")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if len(gotArgs) != 2 || gotArgs[0] != `--user-data-dir=C:\Users\person\profile` {
+		t.Fatalf("browser args = %v, want converted Windows profile path", gotArgs)
+	}
+}
+
+func TestWSLNativeBrowserKeepsLinuxProfilePath(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(t.TempDir(), "chromium")
 	if err := os.WriteFile(executable, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -136,24 +180,63 @@ func TestWSLBrowserReceivesWindowsProfilePath(t *testing.T) {
 			return ""
 		}
 	}
-	browser.output = func(name string, args ...string) ([]byte, error) {
-		if name == "wslpath" && len(args) == 2 && args[0] == "-w" {
-			return []byte(`C:\Users\person\profile` + "\n"), nil
-		}
-		return nil, errors.New("unexpected conversion")
+	browser.output = func(string, ...string) ([]byte, error) {
+		return nil, errors.New("native WSL browser must not invoke path conversion")
 	}
 	browser.command = func(_ string, args ...string) *exec.Cmd {
 		gotArgs = append([]string(nil), args...)
 		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204 -- test helper invocation.
 	}
 
-	err := browser.Open(profilemgr.ProfileSummary{Key: "chatgpt-stable", Label: "person@example.com"}, "https://chatgpt.com/oauth")
-	if err != nil {
+	if err := browser.Open(profilemgr.ProfileSummary{Key: "chatgpt-stable", Label: "person@example.com"}, "https://chatgpt.com/oauth"); err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if len(gotArgs) != 2 || gotArgs[0] != `--user-data-dir=C:\Users\person\profile` {
-		t.Fatalf("browser args = %v, want converted Windows profile path", gotArgs)
+	want := "--user-data-dir=" + filepath.Join(root, "chatgpt-stable")
+	if len(gotArgs) != 2 || gotArgs[0] != want {
+		t.Fatalf("browser args = %v, want native WSL path %q", gotArgs, want)
 	}
+}
+
+func TestWSLBrowserCommandDetectsResolvedWindowsExecutable(t *testing.T) {
+	fixtureExecutable := filepath.Join(t.TempDir(), "browser.exe")
+	if err := os.WriteFile(fixtureExecutable, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixtureInfo, err := os.Stat(fixtureExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := testBrowserLauncher(t)
+	browser.readFile = func(string) ([]byte, error) { return []byte("microsoft-standard-WSL2"), nil }
+	browser.lookPath = func(string) (string, error) { return "/mnt/c/fixture/brave.exe", nil }
+	browser.stat = func(string) (os.FileInfo, error) { return fixtureInfo, nil }
+
+	selected, err := browser.explicitBrowser("brave.exe")
+	if err != nil {
+		t.Fatalf("explicitBrowser() error = %v", err)
+	}
+	if !selected.windows {
+		t.Fatalf("selection = %#v, want resolved Windows browser", selected)
+	}
+}
+
+func TestInstalledBrowserResolution(t *testing.T) {
+	if os.Getenv("CODEX_MANAGE_TEST_INSTALLED_BROWSER") != "1" {
+		t.Skip("set CODEX_MANAGE_TEST_INSTALLED_BROWSER=1 to exercise local browser discovery")
+	}
+	browser := newBrowserLauncher()
+	selected, err := browser.resolveBrowser()
+	if err != nil {
+		t.Fatalf("resolveBrowser() error = %v", err)
+	}
+	hostRoot, browserRoot, err := browser.resolveProfileRoot(selected)
+	if err != nil {
+		t.Fatalf("resolveProfileRoot() error = %v", err)
+	}
+	if selected.executable == "" || selected.name == "" || hostRoot == "" || browserRoot == "" {
+		t.Fatalf("incomplete browser resolution: selection=%#v roots=%q/%q", selected, hostRoot, browserRoot)
+	}
+	t.Logf("resolved %s (windows=%t) at %s with profile root %s", selected.name, selected.windows, selected.executable, browserRoot)
 }
 
 func TestSanitizeLegacyProfileName(t *testing.T) {
