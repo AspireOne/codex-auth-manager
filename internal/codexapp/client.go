@@ -11,12 +11,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
 const stderrTailLimit = 8 * 1024
+
+var (
+	diagnosticAuthorizationPattern = regexp.MustCompile(`(?im)(authorization\s*[:=]\s*)[^\r\n]+`)
+	diagnosticCredentialPattern    = regexp.MustCompile(`(?i)((?:authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)`)
+	diagnosticBearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[^\s,}]+`)
+	diagnosticJWTPattern           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?`)
+	diagnosticAPIKeyPattern        = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}`)
+)
 
 type Seed struct {
 	Prefix         string
@@ -252,9 +261,17 @@ func (s *Session) protocolError(message string, cause error) error {
 		message += ": " + cause.Error()
 	}
 	if diagnostics := strings.TrimSpace(s.stderr.String()); diagnostics != "" {
-		message += "; app-server: " + diagnostics
+		message += "; app-server: " + sanitizeDiagnostics(diagnostics)
 	}
 	return errors.New(message + "; update the Codex CLI if app-server is incompatible")
+}
+
+func sanitizeDiagnostics(value string) string {
+	value = diagnosticAuthorizationPattern.ReplaceAllString(value, `${1}[redacted]`)
+	value = diagnosticCredentialPattern.ReplaceAllString(value, `${1}[redacted]`)
+	value = diagnosticBearerPattern.ReplaceAllString(value, "Bearer [redacted]")
+	value = diagnosticJWTPattern.ReplaceAllString(value, "[redacted-jwt]")
+	return diagnosticAPIKeyPattern.ReplaceAllString(value, "[redacted-api-key]")
 }
 
 func IsolatedEnvironment(environment []string, codexHome, sqliteHome string) []string {

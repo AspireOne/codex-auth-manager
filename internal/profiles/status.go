@@ -41,7 +41,8 @@ type StatusQuerySource struct {
 func (m Manager) LoadProfileStatuses(valid map[string]AuthKind, now time.Time) (map[string]ProfileStatus, error) {
 	cache, err := m.readProfileStatusCache()
 	if err != nil {
-		return nil, err
+		// Status is auxiliary; an unreadable cache must not block the TUI.
+		return map[string]ProfileStatus{}, nil
 	}
 	changed := false
 	for key, status := range cache.Profiles {
@@ -52,9 +53,9 @@ func (m Manager) LoadProfileStatuses(valid map[string]AuthKind, now time.Time) (
 		}
 	}
 	if changed {
-		if err := m.writeProfileStatusCache(cache); err != nil {
-			return nil, err
-		}
+		// Pruning is best effort. Later status writes remain strict and surface
+		// as per-profile failure states when persistence is unavailable.
+		_ = m.writeProfileStatusCache(cache)
 	}
 	return cache.Profiles, nil
 }

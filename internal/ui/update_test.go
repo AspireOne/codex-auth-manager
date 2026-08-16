@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/profilestatus"
 	"codex-manage/internal/updatecheck"
 )
 
@@ -1246,6 +1248,209 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 	}
 	if strings.Contains(apiLine, "% used") || strings.Contains(apiLine, "Cached") {
 		t.Fatalf("API-key row contains ChatGPT status: %q", apiLine)
+	}
+}
+
+func TestRenderEveryChatGPTStatusState(t *testing.T) {
+	percent := 57
+	reset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	cached := &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
+	signIn := &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthSignInRequired}
+	tests := []struct {
+		name string
+		view profileStatusView
+		want []string
+	}{
+		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"57% used", "Authenticated", "Cached"}},
+		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"57% used", "Authenticated", "Loading"}},
+		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"x% used", "resets at x", "Unknown", "Loading"}},
+		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"x% used", "Sign-in required", "Cached"}},
+		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"57% used", "Authenticated", "Cached · failed"}},
+		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"x% used", "Unknown", "Unavailable · failed"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := appModel{profileStatuses: map[string]profileStatusView{"chat": test.view}}
+			got := m.renderProfileStatus("chat")
+			for _, want := range test.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("renderProfileStatus() = %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestStatusTTLBoundaryAndAPIKeyExclusion(t *testing.T) {
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		age       time.Duration
+		wantQueue int
+	}{
+		{name: "just fresh", age: profileStatusTTL - time.Nanosecond, wantQueue: 0},
+		{name: "exactly expired", age: profileStatusTTL, wantQueue: 1},
+		{name: "older", age: profileStatusTTL + time.Minute, wantQueue: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeUIProfile(t, home, "chat@example.com", "acct")
+			manager := profilemgr.NewManager(filepath.Join(home, ".codex"))
+			snapshot, err := manager.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			percent := 10
+			reset := now.Add(time.Hour)
+			if err := manager.SaveProfileStatus(snapshot.Profiles[0].Key, profilemgr.ProfileStatus{
+				FetchedAt: now.Add(-test.age), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+				UsedPercent: &percent, ResetsAt: &reset,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			m := newAppModel(home)
+			m.now = func() time.Time { return now }
+			if err := m.reload(); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(m.statusQueue); got != test.wantQueue {
+				t.Fatalf("queue length = %d, want %d", got, test.wantQueue)
+			}
+		})
+	}
+
+	home := t.TempDir()
+	apiPath := filepath.Join(home, ".codex", "auth_manager", "profiles", "api")
+	if err := os.MkdirAll(filepath.Dir(apiPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(apiPath, []byte(`{"OPENAI_API_KEY":"sk-test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.statusQueue) != 0 || len(m.profileStatuses) != 0 {
+		t.Fatalf("API-key status state = queue %v, statuses %#v", m.statusQueue, m.profileStatuses)
+	}
+}
+
+func TestStatusSchedulerProgressesQueueAndIgnoresLateEpoch(t *testing.T) {
+	profiles := []profilemgr.ProfileSummary{
+		{Key: "one", Kind: profilemgr.AuthKindChatGPT},
+		{Key: "two", Kind: profilemgr.AuthKindChatGPT},
+		{Key: "three", Kind: profilemgr.AuthKindChatGPT},
+	}
+	m := appModel{
+		profiles: profiles, statusFetcher: fakeStatusFetcher{run: func(context.Context, profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error) {
+			return profilemgr.ProfileStatus{}, errors.New("unused")
+		}},
+		profileStatuses: map[string]profileStatusView{"one": {}, "two": {}, "three": {}},
+		statusQueue:     []string{"one", "two", "three"}, statusCancels: map[string]context.CancelFunc{},
+		now: time.Now,
+	}
+	if cmd := m.dispatchStatusFetches(); cmd == nil || len(m.statusCancels) != 2 || len(m.statusQueue) != 1 {
+		t.Fatalf("initial dispatch = cmd %v, in-flight %d, queued %d", cmd, len(m.statusCancels), len(m.statusQueue))
+	}
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{profileKey: "one", epoch: m.statusEpoch, err: errors.New("network")})
+	m = updated.(appModel)
+	if len(m.statusCancels) != 2 || len(m.statusQueue) != 0 {
+		t.Fatalf("progressed scheduler = in-flight %d, queued %d", len(m.statusCancels), len(m.statusQueue))
+	}
+	before := m.profileStatuses["two"]
+	updated, cmd := m.handleStatusFetchFinished(statusFetchFinishedMsg{profileKey: "two", epoch: m.statusEpoch - 1, err: errors.New("late")})
+	got := updated.(appModel)
+	if cmd != nil || got.profileStatuses["two"] != before {
+		t.Fatalf("late result changed state: before %#v, after %#v", before, got.profileStatuses["two"])
+	}
+	m.cancelStatusFetches()
+}
+
+func TestStatusCacheWriteFailureKeepsOnlyActuallyCachedValues(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	m := newAppModel(home)
+	m.now = time.Now
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	key := m.profiles[0].Key
+	m.statusQueue = nil
+	if err := os.MkdirAll(m.profileManager.StatusCacheFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	percent := 20
+	reset := time.Now().Add(time.Hour)
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
+		profileKey: key, epoch: m.statusEpoch,
+		status: profilemgr.ProfileStatus{FetchedAt: time.Now(), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset},
+	})
+	got := updated.(appModel).profileStatuses[key]
+	if got.phase != statusFailed || got.status != nil {
+		t.Fatalf("uncached write failure = %#v, want unavailable failure", got)
+	}
+
+	oldPercent := 5
+	oldReset := reset.Add(time.Hour)
+	old := &profilemgr.ProfileStatus{FetchedAt: time.Now().Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &oldPercent, ResetsAt: &oldReset}
+	m.profileStatuses[key] = profileStatusView{status: old, phase: statusLoading, stale: true}
+	updated, _ = m.handleStatusFetchFinished(statusFetchFinishedMsg{profileKey: key, epoch: m.statusEpoch, err: profilestatus.ErrSignInRequired})
+	got = updated.(appModel).profileStatuses[key]
+	if got.phase != statusFailed || got.status != old || !got.stale {
+		t.Fatalf("cached write failure = %#v, want retained stale cache", got)
+	}
+}
+
+func TestAuthenticationPausesCancelsAndResumesStatusQueue(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "one@example.com", "one")
+	writeUIProfile(t, home, "two@example.com", "two")
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	m.authenticator = fakeUIAuthenticator{run: func(context.Context, profilemgr.ProfileSummary) error { return context.Canceled }}
+	if cmd := m.dispatchStatusFetches(); cmd == nil || len(m.statusCancels) != 2 {
+		t.Fatalf("initial status dispatch = cmd %v, in-flight %d", cmd, len(m.statusCancels))
+	}
+	previousEpoch := m.statusEpoch
+	started, authCmd := m.startAuthentication()
+	m = started.(appModel)
+	if authCmd == nil || !m.statusPaused || len(m.statusCancels) != 0 || m.statusEpoch != previousEpoch+1 {
+		t.Fatalf("authentication did not pause/cancel statuses: paused=%v in-flight=%d epoch=%d", m.statusPaused, len(m.statusCancels), m.statusEpoch)
+	}
+	resumed, statusCmd := m.Update(authenticationFinishedMsg{profileKey: m.authProfileKey, label: m.selectedProfile().Label, err: context.Canceled})
+	m = resumed.(appModel)
+	if statusCmd == nil || m.statusPaused || len(m.statusCancels) != 2 || m.mode != modeNormal {
+		t.Fatalf("authentication cancellation did not resume statuses: paused=%v in-flight=%d mode=%v cmd=%v", m.statusPaused, len(m.statusCancels), m.mode, statusCmd)
+	}
+	m.cancelStatusFetches()
+}
+
+func TestChatGPTStatusUsesMutedStaleStyleAndFourSpaceContinuation(t *testing.T) {
+	percent := 57
+	reset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	status := &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
+	profile := profilemgr.ProfileSummary{Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT, Note: "a custom note"}
+	fresh := appModel{width: 54, profiles: []profilemgr.ProfileSummary{profile}, profileStatuses: map[string]profileStatusView{
+		"chat": {status: status, phase: statusCached},
+	}}
+	stale := fresh
+	stale.profileStatuses = map[string]profileStatusView{"chat": {status: status, phase: statusLoading, stale: true}}
+	freshLine := fresh.renderProfileLineWithStatus(itemStyle, "  ", profile, false, fresh.profileColumnWidth())
+	staleLine := stale.renderProfileLineWithStatus(itemStyle, "  ", profile, false, stale.profileColumnWidth())
+	if freshLine == staleLine {
+		t.Fatal("fresh and stale status styling are identical")
+	}
+	parts := strings.Split(stripANSI(staleLine), "\n")
+	if len(parts) < 2 {
+		t.Fatalf("narrow status did not wrap:\n%s", staleLine)
+	}
+	for _, continuation := range parts[1:] {
+		if !strings.HasPrefix(continuation, "    ") {
+			t.Fatalf("continuation is not four-space indented: %q", continuation)
+		}
 	}
 }
 

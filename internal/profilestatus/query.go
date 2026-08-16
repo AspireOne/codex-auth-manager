@@ -65,8 +65,7 @@ func (q *Queryer) Fetch(ctx context.Context, profile profilemgr.ProfileSummary) 
 }
 
 type appServerAccount struct {
-	RequiresOpenAIAuth bool `json:"requiresOpenaiAuth"`
-	Account            *struct {
+	Account *struct {
 		Type string `json:"type"`
 	} `json:"account"`
 }
@@ -92,8 +91,13 @@ func queryStatus(ctx context.Context, session *codexapp.Session) (profilemgr.Pro
 	if err := session.Request(ctx, "account/read", map[string]bool{"refreshToken": false}, &account); err != nil {
 		return profilemgr.ProfileStatus{}, classifyError(err)
 	}
-	if account.RequiresOpenAIAuth || account.Account == nil || !strings.EqualFold(account.Account.Type, "chatgpt") {
-		return profilemgr.ProfileStatus{}, ErrSignInRequired
+	// requiresOpenaiAuth is a server capability requirement, not login state;
+	// the account and explicit RPC errors are the supported authentication signals.
+	if account.Account == nil {
+		return profilemgr.ProfileStatus{}, fmt.Errorf("%w: no account returned", ErrSignInRequired)
+	}
+	if !strings.EqualFold(account.Account.Type, "chatgpt") {
+		return profilemgr.ProfileStatus{}, fmt.Errorf("%w: account type is not ChatGPT", ErrSignInRequired)
 	}
 	var response rateLimitsResponse
 	if err := session.Request(ctx, "account/rateLimits/read", map[string]any{}, &response); err != nil {
