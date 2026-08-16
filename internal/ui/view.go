@@ -221,7 +221,7 @@ func wrapWords(text string, firstLineWidth, continuationWidth int) []string {
 func (m appModel) renderFooter() string {
 	switch m.mode {
 	case modeInput:
-		return footerStyle.Render(fmt.Sprintf("%s %s", m.inputPrompt, m.inputValue+"█"))
+		return m.textInput.View()
 	case modeConfirm:
 		return footerStyle.Render(m.confirmPrompt)
 	case modeNormal:

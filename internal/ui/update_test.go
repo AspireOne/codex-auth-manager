@@ -203,10 +203,7 @@ func TestHandleActionErrorReloadsStateForErrStateChanged(t *testing.T) {
 	}
 
 	m := newAppModel(home)
-	m.mode = modeInput
-	m.pendingAction = actionSave
-	m.inputPrompt = "Save:"
-	m.inputValue = "saved"
+	m, _ = m.enterInput(actionSave, "Save:", "saved")
 	m.status = "stale"
 	m.authActive = false
 	m.profiles = nil
@@ -648,16 +645,25 @@ func TestEditingProfileNoteUpdatesStatusAndView(t *testing.T) {
 	}
 	m.cursor = 0
 
-	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "n"}))
+	updatedModel, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "n"}))
 	m = updatedModel.(appModel)
 	if m.mode != modeInput || m.pendingAction != actionEditNote {
 		t.Fatalf("mode=%v pendingAction=%v, want note input mode", m.mode, m.pendingAction)
 	}
-	if m.inputValue != "old note" {
-		t.Fatalf("inputValue = %q, want existing note", m.inputValue)
+	if got := m.textInput.Value(); got != "old note" {
+		t.Fatalf("input value = %q, want existing note", got)
+	}
+	if !m.textInput.Focused() {
+		t.Fatal("text input is not focused")
+	}
+	if cmd == nil {
+		t.Fatal("entering input mode returned no cursor focus command")
+	}
+	if got, want := m.textInput.Position(), len([]rune("old note")); got != want {
+		t.Fatalf("cursor position = %d, want %d", got, want)
 	}
 
-	m.inputValue = "updated note"
+	m.textInput.SetValue("updated note")
 	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	got := updatedModel.(appModel)
 
@@ -666,6 +672,9 @@ func TestEditingProfileNoteUpdatesStatusAndView(t *testing.T) {
 	}
 	if got.profiles[0].Note != "updated note" {
 		t.Fatalf("note = %q, want %q", got.profiles[0].Note, "updated note")
+	}
+	if got.textInput.Focused() || got.textInput.Value() != "" || got.textInput.Prompt != "" {
+		t.Fatalf("text input was not reset after submit: focused=%v value=%q prompt=%q", got.textInput.Focused(), got.textInput.Value(), got.textInput.Prompt)
 	}
 	view := fmt.Sprint(got.View())
 	if !strings.Contains(view, "updated note") {
@@ -695,9 +704,7 @@ func TestRemovingProfileNoteClearsIt(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	m.cursor = 0
-	m.mode = modeInput
-	m.pendingAction = actionEditNote
-	m.inputValue = ""
+	m, _ = m.enterInput(actionEditNote, "Edit note:", "")
 
 	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	got := updatedModel.(appModel)
@@ -711,34 +718,122 @@ func TestRemovingProfileNoteClearsIt(t *testing.T) {
 }
 
 func TestInputModeAcceptsSpaceAndPrintableText(t *testing.T) {
-	m := appModel{
-		mode:          modeInput,
-		pendingAction: actionEditNote,
-		inputValue:    "old",
-	}
+	m := newInputModeModel(actionEditNote, "old")
 
 	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: " "}))
 	m = updatedModel.(appModel)
 	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "note"}))
 	got := updatedModel.(appModel)
 
-	if got.inputValue != "old note" {
-		t.Fatalf("inputValue = %q, want %q", got.inputValue, "old note")
+	if value := got.textInput.Value(); value != "old note" {
+		t.Fatalf("input value = %q, want %q", value, "old note")
 	}
 }
 
-func TestInputModeAppendsBracketedPasteContent(t *testing.T) {
-	m := appModel{
-		mode:          modeInput,
-		pendingAction: actionEditNote,
-		inputValue:    "old",
+func TestInputModeEditsAtCursor(t *testing.T) {
+	m := newInputModeModel(actionEditNote, "old note")
+
+	for range 4 {
+		updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+		m = updatedModel.(appModel)
+	}
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "new "}))
+	m = updatedModel.(appModel)
+
+	if got := m.textInput.Value(); got != "old new note" {
+		t.Fatalf("input value after insertion = %q, want %q", got, "old new note")
+	}
+
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDelete}))
+	got := updatedModel.(appModel)
+
+	if value := got.textInput.Value(); value != "old new nte" {
+		t.Fatalf("input value after navigation and delete = %q, want %q", value, "old new nte")
+	}
+}
+
+func TestInputModeSupportsHomeEndAndBackspace(t *testing.T) {
+	m := newInputModeModel(actionEditNote, "old note")
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDelete}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	got := updatedModel.(appModel)
+
+	if value := got.textInput.Value(); value != "ld not" {
+		t.Fatalf("input value = %q, want %q", value, "ld not")
+	}
+}
+
+func TestInputModeNavigatesUnicodeText(t *testing.T) {
+	m := newInputModeModel(actionEditNote, "café")
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	m = updatedModel.(appModel)
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "ff"}))
+	got := updatedModel.(appModel)
+
+	if value := got.textInput.Value(); value != "caffé" {
+		t.Fatalf("input value = %q, want %q", value, "caffé")
+	}
+}
+
+func TestCancellingInputModeResetsTextInput(t *testing.T) {
+	m := newInputModeModel(actionEditNote, "unsaved note")
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	got := updatedModel.(appModel)
+
+	if got.mode != modeNormal || got.pendingAction != actionNone {
+		t.Fatalf("mode=%v pendingAction=%v, want normal mode", got.mode, got.pendingAction)
+	}
+	if got.textInput.Focused() || got.textInput.Value() != "" || got.textInput.Prompt != "" {
+		t.Fatalf("text input was not reset after cancel: focused=%v value=%q prompt=%q", got.textInput.Focused(), got.textInput.Value(), got.textInput.Prompt)
+	}
+	if got.status != "Cancelled." {
+		t.Fatalf("status = %q, want %q", got.status, "Cancelled.")
+	}
+}
+
+func TestInputModeInsertsBracketedPasteAtCursor(t *testing.T) {
+	m := newInputModeModel(actionEditNote, "old")
+
+	for range 2 {
+		updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+		m = updatedModel.(appModel)
 	}
 
 	updatedModel, _ := m.Update(tea.PasteMsg{Content: " note\tfrom\r\npaste"})
 	got := updatedModel.(appModel)
 
-	if got.inputValue != "old note from  paste" {
-		t.Fatalf("inputValue = %q, want %q", got.inputValue, "old note from  paste")
+	if value := got.textInput.Value(); value != "o note from  pasteld" {
+		t.Fatalf("input value = %q, want %q", value, "o note from  pasteld")
+	}
+}
+
+func TestInputModeResizesAvailableTextWidth(t *testing.T) {
+	m := newAppModel(t.TempDir())
+	m.width = 50
+	m, _ = m.enterInput(actionEditNote, "Edit note:", "old note")
+
+	want := 50 - baseStyle.GetHorizontalFrameSize() - lipgloss.Width(m.textInput.Prompt)
+	if got := m.textInput.Width(); got != want {
+		t.Fatalf("input width = %d, want %d", got, want)
+	}
+
+	updatedModel, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 20})
+	got := updatedModel.(appModel)
+	want = 30 - baseStyle.GetHorizontalFrameSize() - lipgloss.Width(got.textInput.Prompt)
+	if gotWidth := got.textInput.Width(); gotWidth != want {
+		t.Fatalf("resized input width = %d, want %d", gotWidth, want)
 	}
 }
 
@@ -909,6 +1004,12 @@ func profileViews(names ...string) []profilemgr.ProfileSummary {
 		profiles[i] = profilemgr.ProfileSummary{Name: name}
 	}
 	return profiles
+}
+
+func newInputModeModel(nextAction action, value string) appModel {
+	m := appModel{textInput: newTextInput()}
+	m, _ = m.enterInput(nextAction, "Input:", value)
+	return m
 }
 
 func writeUIProfile(t *testing.T, home, name, accountID string) {

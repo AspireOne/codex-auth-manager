@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"sort"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/updatecheck"
@@ -58,8 +60,7 @@ type appModel struct {
 
 	mode            mode
 	pendingAction   action
-	inputValue      string
-	inputPrompt     string
+	textInput       textinput.Model
 	confirmPrompt   string
 	status          string
 	statusKind      statusKind
@@ -96,8 +97,21 @@ func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
 	return appModel{
 		profileManager: profilemgr.NewManager(codexDir),
+		textInput:      newTextInput(),
 		status:         "Ready.",
 	}
+}
+
+func newTextInput() textinput.Model {
+	input := textinput.New()
+	styles := input.Styles()
+	styles.Focused.Prompt = footerStyle
+	styles.Focused.Text = footerStyle
+	styles.Blurred.Prompt = footerStyle
+	styles.Blurred.Text = footerStyle
+	styles.Cursor.Color = mutedColor
+	input.SetStyles(styles)
+	return input
 }
 
 func (m appModel) Init() tea.Cmd {
@@ -170,22 +184,25 @@ func (m *appModel) clearMessages() {
 	m.errText = ""
 }
 
-func (m *appModel) enterInput(nextAction action, prompt, value string) appModel {
+func (m *appModel) enterInput(nextAction action, prompt, value string) (appModel, tea.Cmd) {
 	m.mode = modeInput
 	m.pendingAction = nextAction
-	m.inputPrompt = prompt
-	m.inputValue = value
 	m.confirmPrompt = ""
+	m.resetInput()
+	m.textInput.Prompt = prompt + " "
+	m.textInput.SetValue(value)
+	m.textInput.CursorEnd()
+	m.resizeInput()
 	m.clearMessages()
-	return *m
+	cmd := m.textInput.Focus()
+	return *m, cmd
 }
 
 func (m *appModel) enterConfirm(nextAction action, prompt string) appModel {
 	m.mode = modeConfirm
 	m.pendingAction = nextAction
 	m.confirmPrompt = prompt
-	m.inputPrompt = ""
-	m.inputValue = ""
+	m.resetInput()
 	m.clearMessages()
 	return *m
 }
@@ -193,9 +210,8 @@ func (m *appModel) enterConfirm(nextAction action, prompt string) appModel {
 func (m *appModel) cancelMode() appModel {
 	m.mode = modeNormal
 	m.pendingAction = actionNone
-	m.inputPrompt = ""
-	m.inputValue = ""
 	m.confirmPrompt = ""
+	m.resetInput()
 	m.setStatus("Cancelled.")
 	return *m
 }
@@ -203,10 +219,25 @@ func (m *appModel) cancelMode() appModel {
 func (m *appModel) exitMode() appModel {
 	m.mode = modeNormal
 	m.pendingAction = actionNone
-	m.inputPrompt = ""
-	m.inputValue = ""
 	m.confirmPrompt = ""
+	m.resetInput()
 	return *m
+}
+
+func (m *appModel) resetInput() {
+	m.textInput.Blur()
+	m.textInput.Reset()
+	m.textInput.Prompt = ""
+}
+
+func (m *appModel) resizeInput() {
+	if m.width <= 0 {
+		m.textInput.SetWidth(0)
+		return
+	}
+
+	width := m.width - baseStyle.GetHorizontalFrameSize() - lipgloss.Width(m.textInput.Prompt)
+	m.textInput.SetWidth(max(1, width))
 }
 
 func (m *appModel) reloadAndExitWithError(err error) appModel {

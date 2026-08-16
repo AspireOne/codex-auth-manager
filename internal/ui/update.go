@@ -17,6 +17,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.mode == modeInput {
+			m.resizeInput()
+		}
 		return m, nil
 
 	case updateCheckMsg:
@@ -33,12 +36,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.PasteMsg:
-		if m.mode == modeInput {
-			m.inputValue += sanitizeInputText(msg.Content)
-		}
-		return m, nil
-
 	case tea.KeyPressMsg:
 		switch m.mode {
 		case modeNormal:
@@ -50,6 +47,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			return m.updateNormal(msg)
 		}
+	}
+	if m.mode == modeInput {
+		return m.updateInput(msg)
 	}
 
 	return m, nil
@@ -78,10 +78,10 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		return m.enterRenameMode(), nil
+		return m.enterRenameMode()
 
 	case "n":
-		return m.enterEditNoteMode(), nil
+		return m.enterEditNoteMode()
 
 	case "p":
 		return m.cycleSelectedPlan(), nil
@@ -103,7 +103,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setInfo(fmt.Sprintf("Current auth is already saved as profile %q.", m.currentProfile))
 			return m, nil
 		}
-		return m.enterInput(actionSave, "Save current auth as profile:", ""), nil
+		return m.enterInput(actionSave, "Save current auth as profile:", "")
 
 	case "d":
 		if len(m.profiles) == 0 {
@@ -155,73 +155,66 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModel) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		return m.cancelMode(), nil
+func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		switch keyMsg.String() {
+		case "esc":
+			return m.cancelMode(), nil
 
-	case keyEnter:
-		value := strings.TrimSpace(m.inputValue)
-		switch m.pendingAction {
-		case actionNone, actionDelete, actionLogout, actionActivate:
-			return m.exitMode(), nil
-		case actionSave:
-			if err := m.profileManager.SaveCurrent(value); err != nil {
-				return m.handleActionError(err), nil
-			}
-			if err := m.reload(); err != nil {
-				m.setError(err.Error())
+		case keyEnter:
+			value := strings.TrimSpace(m.textInput.Value())
+			switch m.pendingAction {
+			case actionNone, actionDelete, actionLogout, actionActivate:
 				return m.exitMode(), nil
-			}
-			m.setStatus(fmt.Sprintf("Saved current auth as %q.", value))
-			return m.exitMode(), nil
+			case actionSave:
+				if err := m.profileManager.SaveCurrent(value); err != nil {
+					return m.handleActionError(err), nil
+				}
+				if err := m.reload(); err != nil {
+					m.setError(err.Error())
+					return m.exitMode(), nil
+				}
+				m.setStatus(fmt.Sprintf("Saved current auth as %q.", value))
+				return m.exitMode(), nil
 
-		case actionRename:
-			oldName := m.selectedProfileName()
-			if err := m.profileManager.Rename(oldName, value, m.currentProfile); err != nil {
-				return m.handleActionError(err), nil
-			}
-			if err := m.reload(); err != nil {
-				m.setError(err.Error())
+			case actionRename:
+				oldName := m.selectedProfileName()
+				if err := m.profileManager.Rename(oldName, value, m.currentProfile); err != nil {
+					return m.handleActionError(err), nil
+				}
+				if err := m.reload(); err != nil {
+					m.setError(err.Error())
+					return m.exitMode(), nil
+				}
+				m.cursor = indexOfProfile(m.profiles, value)
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+				m.setStatus(fmt.Sprintf("Renamed %q to %q.", oldName, value))
 				return m.exitMode(), nil
-			}
-			m.cursor = indexOfProfile(m.profiles, value)
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			m.setStatus(fmt.Sprintf("Renamed %q to %q.", oldName, value))
-			return m.exitMode(), nil
-		case actionEditNote:
-			name := m.selectedProfileName()
-			if err := m.profileManager.SetNote(name, value); err != nil {
-				return m.handleActionError(err), nil
-			}
-			if err := m.reload(); err != nil {
-				m.setError(err.Error())
+			case actionEditNote:
+				name := m.selectedProfileName()
+				if err := m.profileManager.SetNote(name, value); err != nil {
+					return m.handleActionError(err), nil
+				}
+				if err := m.reload(); err != nil {
+					m.setError(err.Error())
+					return m.exitMode(), nil
+				}
+				if value == "" {
+					m.setStatus(fmt.Sprintf("Removed note for %q.", name))
+				} else {
+					m.setStatus(fmt.Sprintf("Updated note for %q.", name))
+				}
 				return m.exitMode(), nil
-			}
-			if value == "" {
-				m.setStatus(fmt.Sprintf("Removed note for %q.", name))
-			} else {
-				m.setStatus(fmt.Sprintf("Updated note for %q.", name))
 			}
 			return m.exitMode(), nil
 		}
-		return m.exitMode(), nil
-
-	case "backspace":
-		runes := []rune(m.inputValue)
-		if len(runes) > 0 {
-			m.inputValue = string(runes[:len(runes)-1])
-		}
-		return m, nil
 	}
 
-	if text := sanitizeInputText(msg.Key().Text); text != "" {
-		m.inputValue += text
-	}
-
-	return m, nil
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
 }
 
 func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -269,18 +262,18 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModel) enterRenameMode() appModel {
+func (m appModel) enterRenameMode() (tea.Model, tea.Cmd) {
 	if len(m.profiles) == 0 {
 		m.setError("No profiles to rename.")
-		return m
+		return m, nil
 	}
 	return m.enterInput(actionRename, fmt.Sprintf("Rename profile %q to:", m.selectedProfileName()), m.selectedProfileName())
 }
 
-func (m appModel) enterEditNoteMode() appModel {
+func (m appModel) enterEditNoteMode() (tea.Model, tea.Cmd) {
 	if len(m.profiles) == 0 {
 		m.setError("No profiles to edit.")
-		return m
+		return m, nil
 	}
 	selected := m.selectedProfile()
 	return m.enterInput(actionEditNote, fmt.Sprintf("Edit note for %q:", selected.Name), selected.Note)

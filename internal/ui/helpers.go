@@ -1,33 +1,6 @@
 package ui
 
-import (
-	"strings"
-	"unicode"
-
-	profilemgr "codex-manage/internal/profiles"
-)
-
-func isPrintableRune(r rune) bool {
-	return unicode.IsPrint(r)
-}
-
-func sanitizeInputText(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-
-	for _, r := range s {
-		switch r {
-		case '\r', '\n', '\t':
-			b.WriteRune(' ')
-		default:
-			if isPrintableRune(r) {
-				b.WriteRune(r)
-			}
-		}
-	}
-
-	return b.String()
-}
+import profilemgr "codex-manage/internal/profiles"
 
 func formatKeyHint(key, action string) string {
 	return keyHintStyle.Render(key) + " " + action
