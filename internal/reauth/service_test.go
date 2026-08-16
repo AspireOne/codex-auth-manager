@@ -257,11 +257,18 @@ func newTestService(t *testing.T, scenario, loginAccount string) (*Service, prof
 }
 
 func TestReauthHelperProcess(t *testing.T) {
-	if len(os.Args) < 3 || os.Args[len(os.Args)-3] != "--helper" {
+	argument := -1
+	for index, value := range os.Args {
+		if value == "--helper" && index+2 < len(os.Args) {
+			argument = index
+			break
+		}
+	}
+	if argument == -1 {
 		return
 	}
-	scenario := os.Args[len(os.Args)-2]
-	accountID := os.Args[len(os.Args)-1]
+	scenario := os.Args[argument+1]
+	accountID := os.Args[argument+2]
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var request struct {
@@ -282,7 +289,7 @@ func TestReauthHelperProcess(t *testing.T) {
 				fmt.Printf(`{"id":%d,"error":{"code":-32601,"message":"unsupported login"}}`+"\n", request.ID)
 			case "exit":
 				_, _ = fmt.Fprintln(os.Stderr, "fixture app-server exited")
-				return
+				os.Exit(0)
 			case "invalid-response":
 				fmt.Printf(`{"id":%d,"result":{"type":"chatgpt","loginId":"","authUrl":"https://chatgpt.com/oauth"}}`+"\n", request.ID)
 			case "invalid-url":
@@ -299,9 +306,10 @@ func TestReauthHelperProcess(t *testing.T) {
 				}
 			}
 		case "account/login/cancel":
-			return
+			os.Exit(0)
 		}
 	}
+	os.Exit(0)
 }
 
 func writeHelperAuth(accountID string) {

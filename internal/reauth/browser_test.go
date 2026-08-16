@@ -118,7 +118,7 @@ func TestManagedProfileRootDefaults(t *testing.T) {
 }
 
 func TestWSLBrowserReceivesWindowsProfilePath(t *testing.T) {
-	root := t.TempDir()
+	root := wslTestRoot(t)
 	fixtureExecutable := filepath.Join(t.TempDir(), "browser.exe")
 	if err := os.WriteFile(fixtureExecutable, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -162,11 +162,16 @@ func TestWSLBrowserReceivesWindowsProfilePath(t *testing.T) {
 }
 
 func TestWSLNativeBrowserKeepsLinuxProfilePath(t *testing.T) {
-	root := t.TempDir()
-	executable := filepath.Join(t.TempDir(), "chromium")
-	if err := os.WriteFile(executable, nil, 0o600); err != nil {
+	root := wslTestRoot(t)
+	fixtureExecutable := filepath.Join(t.TempDir(), "chromium")
+	if err := os.WriteFile(fixtureExecutable, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	fixtureInfo, err := os.Stat(fixtureExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := "/tmp/codex-manage-browser"
 	var gotArgs []string
 	browser := testBrowserLauncher(t)
 	browser.readFile = func(string) ([]byte, error) { return []byte("microsoft-standard-WSL2"), nil }
@@ -180,6 +185,7 @@ func TestWSLNativeBrowserKeepsLinuxProfilePath(t *testing.T) {
 			return ""
 		}
 	}
+	browser.stat = func(string) (os.FileInfo, error) { return fixtureInfo, nil }
 	browser.output = func(string, ...string) ([]byte, error) {
 		return nil, errors.New("native WSL browser must not invoke path conversion")
 	}
@@ -195,6 +201,13 @@ func TestWSLNativeBrowserKeepsLinuxProfilePath(t *testing.T) {
 	if len(gotArgs) != 2 || gotArgs[0] != want {
 		t.Fatalf("browser args = %v, want native WSL path %q", gotArgs, want)
 	}
+}
+
+func wslTestRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.ToSlash(filepath.Join(string(os.PathSeparator), "tmp", "codex-manage", t.Name()))
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
 }
 
 func TestWSLBrowserCommandDetectsResolvedWindowsExecutable(t *testing.T) {
