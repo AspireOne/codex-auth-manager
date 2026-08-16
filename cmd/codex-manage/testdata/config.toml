@@ -1,0 +1,2 @@
+forced_login_method = "chatgpt"
+forced_chatgpt_workspace_id = "workspace-fixture"

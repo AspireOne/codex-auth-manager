@@ -151,6 +151,27 @@ func TestManagerReplaceAndActivateSyncsPreviouslyActiveProfileFirst(t *testing.T
 	assertAuthFileContents(t, currentPath, changedCurrent)
 }
 
+func TestManagerReplaceAndActivateMarksFailureAfterProfileReplacement(t *testing.T) {
+	m, paths := newTestManager(t)
+	targetPath := filepath.Join(paths.profileDir, testProfileNameWork)
+	writeAuthFile(t, targetPath, chatGPTAuthFixture("acct-work", "old@example.com"))
+	freshPath := filepath.Join(t.TempDir(), "auth.json")
+	fresh := chatGPTAuthFixture("acct-work", "fresh@example.com")
+	writeAuthFile(t, freshPath, fresh)
+
+	blockingAuthPath := filepath.Join(t.TempDir(), "auth-blocker")
+	if err := os.Mkdir(blockingAuthPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m.AuthFile = blockingAuthPath
+
+	err := m.ReplaceAndActivate(testProfileNameWork, freshPath)
+	if !errors.Is(err, ErrStateChanged) {
+		t.Fatalf("ReplaceAndActivate() error = %v, want ErrStateChanged", err)
+	}
+	assertAuthFileContents(t, targetPath, fresh)
+}
+
 func TestManagerSaveCurrentReturnsErrStateChangedAfterProfileIsSaved(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, paths.authFile, authFixture("account-save", "api-save"))

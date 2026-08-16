@@ -62,6 +62,23 @@ You can also build directly with Go:
 go build -o dist/ ./cmd/codex-manage
 ```
 
+## Test
+
+Run the complete automated suite:
+
+```sh
+go test ./...
+```
+
+The suite includes file-backed, black-box login scenarios with fake Codex and browser executables. To additionally exercise the installed Codex app-server handshake and login-start API without opening a browser or changing credentials:
+
+```sh
+CODEX_MANAGE_TEST_INSTALLED_CODEX=1 \
+  go test ./internal/reauth -run TestInstalledCodexAppServerLoginStartAndCancel -count=1 -v
+```
+
+See [Authentication testing](docs/authentication-testing.md) for the coverage matrix and optional live OAuth checklist.
+
 ## Release
 
 Create and push a release tag with:

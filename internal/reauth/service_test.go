@@ -2,6 +2,7 @@ package reauth
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -127,6 +128,9 @@ func TestServiceReauthenticateReportsProtocolAndOutputFailures(t *testing.T) {
 	}{
 		{"malformed", "malformed protocol data"},
 		{"rejected", "unsupported login"},
+		{"exit", "fixture app-server exited"},
+		{"invalid-response", "invalid login response"},
+		{"invalid-url", "invalid authentication URL"},
 		{"failed", "user denied login"},
 		{"missing-auth", "did not write auth.json"},
 	}
@@ -147,6 +151,50 @@ func TestServiceRejectsBrowserLaunchFailure(t *testing.T) {
 	err := service.Reauthenticate(context.Background(), profile)
 	if err == nil || !strings.Contains(err.Error(), "browser unavailable") {
 		t.Fatalf("Reauthenticate() error = %v, want browser error", err)
+	}
+}
+
+func TestInstalledCodexAppServerLoginStartAndCancel(t *testing.T) {
+	if os.Getenv("CODEX_MANAGE_TEST_INSTALLED_CODEX") != "1" {
+		t.Skip("set CODEX_MANAGE_TEST_INSTALLED_CODEX=1 to exercise the installed Codex app-server")
+	}
+	codex, err := exec.LookPath("codex")
+	if err != nil {
+		t.Skip("codex is not installed on PATH")
+	}
+
+	codexDir := filepath.Join(t.TempDir(), ".codex")
+	manager := profilemgr.NewManager(codexDir)
+	profilePath := filepath.Join(manager.ProfileDir, "work")
+	writeTestAuth(t, profilePath, "acct-work", false)
+	snapshot, err := manager.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	before, err := os.ReadFile(profilePath) // #nosec G304 -- test path is under t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service := New(manager)
+	service.lookPath = func(string) (string, error) { return codex, nil }
+	service.browser = fakeBrowser{err: errors.New("intentional smoke-test cancellation")}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err = service.Reauthenticate(ctx, snapshot.Profiles[0])
+	if err == nil || !strings.Contains(err.Error(), "intentional smoke-test cancellation") {
+		t.Fatalf("Reauthenticate() error = %v, want controlled browser cancellation", err)
+	}
+
+	after, err := os.ReadFile(profilePath) // #nosec G304 -- test path is under t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("saved profile changed during installed-Codex smoke test\ngot: %s\nwant: %s", after, before)
+	}
+	if _, err := os.Stat(manager.AuthFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("live auth exists after installed-Codex cancellation: %v", err)
 	}
 }
 
@@ -232,6 +280,13 @@ func TestReauthHelperProcess(t *testing.T) {
 				fmt.Println("{not-json")
 			case "rejected":
 				fmt.Printf(`{"id":%d,"error":{"code":-32601,"message":"unsupported login"}}`+"\n", request.ID)
+			case "exit":
+				_, _ = fmt.Fprintln(os.Stderr, "fixture app-server exited")
+				return
+			case "invalid-response":
+				fmt.Printf(`{"id":%d,"result":{"type":"chatgpt","loginId":"","authUrl":"https://chatgpt.com/oauth"}}`+"\n", request.ID)
+			case "invalid-url":
+				fmt.Printf(`{"id":%d,"result":{"type":"chatgpt","loginId":"login-1","authUrl":"http://chatgpt.com/oauth"}}`+"\n", request.ID)
 			default:
 				fmt.Printf(`{"id":%d,"result":{"type":"chatgpt","loginId":"login-1","authUrl":"https://chatgpt.com/oauth"}}`+"\n", request.ID)
 				if scenario == "failed" {

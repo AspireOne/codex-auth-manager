@@ -1,0 +1,3 @@
+{"id":1,"result":{}}
+{"id":2,"result":{"type":"chatgpt","loginId":"login-fixture","authUrl":"https://chatgpt.com/oauth/fixture"}}
+{"method":"account/login/completed","params":{"loginId":"login-fixture","success":true,"error":null}}
