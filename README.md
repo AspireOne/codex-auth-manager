@@ -170,31 +170,22 @@ Re-authenticate and activate an existing ChatGPT profile:
 codex-manage --login matej@example.com
 ```
 
-In the TUI, select a ChatGPT profile and press `a`. The status area remains in an authentication state until the browser flow finishes; press `Esc` to cancel. API-key profiles cannot use this workflow.
+Or, in the TUI, select a ChatGPT profile and press `a`; press `Esc` to cancel. API-key profiles cannot use this workflow.
 
 ## Browser-based re-authentication
 
-Re-authentication runs `codex app-server` with a private temporary `CODEX_HOME`, then opens the returned OAuth URL in a dedicated Chromium user-data directory. The temporary login must return the same ChatGPT `account_id` as the selected saved profile. Only after that check passes does `codex-manage` replace and activate the saved credentials. A cancelled, failed, malformed, or mismatched login leaves the saved profile and active `auth.json` unchanged.
+Re-authentication uses an isolated temporary Codex home and opens OAuth in a dedicated Chromium user-data directory. It installs credentials only when the signed-in `account_id` matches the selected profile, then activates it. Cancellation, failure, or an account mismatch leaves saved and active credentials unchanged.
 
-Brave, Chromium, Chrome, and Edge are supported. Detection prefers Brave, then Chromium, Chrome, and Edge. Override detection or storage when needed:
+Brave, Chromium, Chrome, and Edge are supported; detection prefers them in that order. Override the browser or profile root when needed:
 
 | Environment variable | Purpose |
 | --- | --- |
 | `CODEX_MANAGE_BROWSER_EXECUTABLE` | Browser executable path or command name |
 | `CODEX_MANAGE_BROWSER_PROFILES_DIR` | Root for per-account browser data |
-| `CODEX_BRAVE_EXE` | Legacy Brave executable override |
-| `CODEX_BROWSER_PROFILES_DIR` | Legacy browser-profile root |
 
-Existing `codex-browser` data under `~/.codex-browser-profiles` (or the Windows user profile equivalent) is reused automatically. Within a root, the stable auth-manager profile key is preferred; an existing legacy directory derived from the account label/email is reused when present. Browser data is intentionally not deleted when an auth profile is deleted.
+Existing `codex-browser` data and its legacy environment variables (`CODEX_BRAVE_EXE`, `CODEX_BROWSER_PROFILES_DIR`) are reused automatically. Browser data contains session cookies, is never deleted with an auth profile, and should be protected accordingly.
 
-Without an override or existing legacy root, new browser data is stored under:
-
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/codex-manage/browser-profiles/<browser>`
-- macOS: `~/Library/Application Support/codex-manage/browser-profiles/<browser>`
-- Windows: `%LOCALAPPDATA%\codex-manage\browser-profiles\<browser>`
-- WSL with a Windows browser: the Windows Local AppData location above
-
-These directories contain browser cookies and other session data, can grow substantially, and should be protected like any signed-in browser profile. Normal `codex login` and the Codex TUI `/login` remain untouched: `codex-manage` does not set or export `$BROWSER`.
+Normal `codex login` and Codex TUI `/login` remain untouched: `codex-manage` does not set or export `$BROWSER`.
 
 If you previously sourced `codex-login.zsh` from `codex-browser`, you can stop sourcing it after moving to `codex-manage --login`; no browser data migration is required.
 
