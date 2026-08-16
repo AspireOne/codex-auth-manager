@@ -222,8 +222,17 @@ func (m appModel) renderProfileStatusColumns(key string) []string {
 	for i, value := range values {
 		values[i] = value + strings.Repeat(" ", widths[i]-lipgloss.Width(value))
 	}
+	values[0] = m.remainingPercentStyle(key).Render(values[0])
 	values[2] = m.profileAuthIndicatorStyle(key).Render(values[2])
 	return values
+}
+
+func (m appModel) remainingPercentStyle(key string) lipgloss.Style {
+	view, ok := m.profileStatuses[key]
+	if !ok || view.status == nil || view.status.UsedPercent == nil || view.status.ResetsAt == nil {
+		return lipgloss.NewStyle()
+	}
+	return lipgloss.NewStyle().Foreground(remainingPercentColor(remainingPercent(*view.status.UsedPercent)))
 }
 
 func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {

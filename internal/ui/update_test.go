@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1094,6 +1095,27 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 	}
 	if firstAuth, secondAuth := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗"); firstAuth != secondAuth {
 		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", firstAuth, secondAuth, firstLine, secondLine)
+	}
+}
+
+func TestRemainingPercentColorGradient(t *testing.T) {
+	tests := []struct {
+		percent int
+		want    color.RGBA
+	}{
+		{percent: 0, want: remainingEmptyColor},
+		{percent: 25, want: color.RGBA{R: 255, G: 180, B: 157, A: 255}},
+		{percent: 50, want: remainingCautionColor},
+		{percent: 75, want: color.RGBA{R: 221, G: 231, B: 189, A: 255}},
+		{percent: 100, want: remainingFullColor},
+	}
+
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("%d%%", test.percent), func(t *testing.T) {
+			if got := remainingPercentColor(test.percent); got != test.want {
+				t.Fatalf("remainingPercentColor(%d) = %q, want %q", test.percent, got, test.want)
+			}
+		})
 	}
 }
 

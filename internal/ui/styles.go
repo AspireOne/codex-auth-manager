@@ -1,6 +1,16 @@
 package ui
 
-import lipgloss "charm.land/lipgloss/v2"
+import (
+	"image/color"
+
+	lipgloss "charm.land/lipgloss/v2"
+)
+
+var (
+	remainingEmptyColor   = color.RGBA{R: 255, G: 144, B: 144, A: 255}
+	remainingCautionColor = color.RGBA{R: 254, G: 215, B: 170, A: 255}
+	remainingFullColor    = color.RGBA{R: 187, G: 247, B: 208, A: 255}
+)
 
 var (
 	accentColor  = lipgloss.Color("#8B5CF6")
@@ -79,3 +89,31 @@ var (
 			Foreground(mutedColor).
 			Italic(true)
 )
+
+func remainingPercentColor(percent int) color.RGBA {
+	percent = max(0, min(100, percent))
+	if percent <= 50 {
+		return interpolateColor(remainingEmptyColor, remainingCautionColor, percent, 50)
+	}
+	return interpolateColor(remainingCautionColor, remainingFullColor, percent-50, 50)
+}
+
+func interpolateColor(start, end color.RGBA, position, span int) color.RGBA {
+	return color.RGBA{
+		R: interpolateColorChannel(start.R, end.R, position, span),
+		G: interpolateColorChannel(start.G, end.G, position, span),
+		B: interpolateColorChannel(start.B, end.B, position, span),
+		A: 255,
+	}
+}
+
+func interpolateColorChannel(start, end uint8, position, span int) uint8 {
+	value := (int(start)*(span-position) + int(end)*position + span/2) / span
+	if value < 0 {
+		return 0
+	}
+	if value > 255 {
+		return 255
+	}
+	return uint8(value)
+}
