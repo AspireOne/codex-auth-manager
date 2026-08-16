@@ -1,8 +1,12 @@
 no_tty: true
 
 pre-commit:
-  parallel: true
+  parallel: false
   commands:
+    go-format:
+      glob: "*.go"
+      run: go tool -modfile tools.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint fmt
+      stage_fixed: true
     golangci-lint:
       glob: "*.go"
       run: go tool -modfile tools.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint run
