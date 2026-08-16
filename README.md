@@ -175,29 +175,13 @@ Or, in the TUI, select a ChatGPT profile and press `a`; press `Esc` to cancel. A
 
 ## Browser-based re-authentication
 
-Re-authentication uses an isolated temporary Codex home and opens OAuth in a dedicated Chromium user-data directory. It installs credentials only when the signed-in `account_id` matches the selected profile, then activates it. Cancellation, failure, or an account mismatch leaves saved and active credentials unchanged.
+Select a ChatGPT profile and sign in again without leaving the manager. It opens a dedicated browser session, then updates and activates the profile after a successful sign-in.
 
-Brave, Chromium, Chrome, and Edge are supported; detection prefers them in that order. Override the browser or profile root when needed:
+Brave, Chromium, Chrome, and Edge are supported. If needed, choose the browser or browser-profile location with:
 
 | Environment variable | Purpose |
 | --- | --- |
 | `CODEX_MANAGE_BROWSER_EXECUTABLE` | Browser executable path or command name |
-| `CODEX_MANAGE_BROWSER_PROFILES_DIR` | Root for per-account browser data |
+| `CODEX_MANAGE_BROWSER_PROFILES_DIR` | Browser-profile location |
 
-Existing `codex-browser` data and its legacy environment variables (`CODEX_BRAVE_EXE`, `CODEX_BROWSER_PROFILES_DIR`) are reused automatically. Browser data contains session cookies, is never deleted with an auth profile, and should be protected accordingly.
-
-Normal `codex login` and Codex TUI `/login` remain untouched: `codex-manage` does not set or export `$BROWSER`.
-
-If you previously sourced `codex-login.zsh` from `codex-browser`, you can stop sourcing it after moving to `codex-manage --login`; no browser data migration is required.
-
-## ChatGPT usage status
-
-ChatGPT profile rows show the shortest Codex quota window as `N% used`, its local reset time, authentication status, and cache state. API-key profiles remain local-only and do not make status requests.
-
-Status comes from the installed `codex` CLI's App Server, so `codex` must be available on `PATH`. Results are cached for 30 minutes in `~/.codex/auth_manager/.profile-status-cache.json`. Fresh entries show `Cached` and make no request. Expired entries remain visible in a muted color while `Loading`; failures retain cached values as `Cached · failed`. Missing data uses `x`/`Unknown`, and an explicit credential rejection shows `Sign-in required`.
-
-Status refreshes only when the TUI starts or reloads its profiles; there is no timer or force-refresh action. `Ctrl+R` respects the same 30-minute cache. Re-authenticating a profile invalidates its entry and triggers a new status request.
-
-ChatGPT labels come from the email claim in `auth.json`; if it is unavailable, the UI shows a shortened account ID. API-key profiles use an optional custom label and otherwise show a non-secret SHA-256 fingerprint. Profile filenames are opaque internal keys and are not accepted by `--select`.
-
-Saved profiles are restrictive copies of Codex's `auth.json`. This means API keys remain stored in plaintext with `0600` permissions, matching Codex's own representation.
+The profile list also shows each ChatGPT account's current quota usage, reset time, and sign-in status at a glance. Usage details are refreshed automatically and reused briefly, keeping profile switching fast.
