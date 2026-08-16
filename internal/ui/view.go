@@ -158,11 +158,11 @@ func (m appModel) renderProfileStatus(key string) string {
 	if !ok {
 		view = profileStatusView{phase: statusLoading}
 	}
-	usage := "x% used (resets at x)"
+	usage := "-% used (resets -)"
 	auth := "Unknown"
 	if view.status != nil {
 		if view.status.UsedPercent != nil && view.status.ResetsAt != nil {
-			usage = fmt.Sprintf("%d%% used (resets at %s)", *view.status.UsedPercent, view.status.ResetsAt.In(time.Local).Format("2006-01-02 15:04"))
+			usage = fmt.Sprintf("%d%% used (resets %s)", *view.status.UsedPercent, view.status.ResetsAt.In(time.Local).Format("02.01. 15:04"))
 		}
 		switch view.status.AuthStatus {
 		case profilemgr.ProfileAuthAuthenticated:
@@ -207,13 +207,12 @@ func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, 
 	const currentMarker = " ●"
 	const markerWidth = 2
 
-	cellText := prefix + label
-	paddingWidth := profileColumnWidth - lipgloss.Width(cellText) - markerWidth
+	paddingWidth := profileColumnWidth - lipgloss.Width(prefix+label) - markerWidth
 	if paddingWidth < 0 {
 		paddingWidth = 0
 	}
 
-	cell := style.Render(cellText) + strings.Repeat(" ", paddingWidth)
+	cell := style.Render(prefix+label) + strings.Repeat(" ", paddingWidth)
 	if isCurrent {
 		return cell + currentTag.Render(currentMarker)
 	}

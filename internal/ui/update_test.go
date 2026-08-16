@@ -1235,7 +1235,7 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 		},
 	}
 	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"57% used", "resets at 2026-08-16 15:30", "Authenticated", "Cached"} {
+	for _, want := range []string{"57% used", "resets 16.08. 15:30", "Authenticated", "Cached"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
 		}
@@ -1263,10 +1263,10 @@ func TestRenderEveryChatGPTStatusState(t *testing.T) {
 	}{
 		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"57% used", "Authenticated", "Cached"}},
 		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"57% used", "Authenticated", "Loading"}},
-		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"x% used", "resets at x", "Unknown", "Loading"}},
-		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"x% used", "Sign-in required", "Cached"}},
+		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-% used", "resets -", "Unknown", "Loading"}},
+		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-% used", "Sign-in required", "Cached"}},
 		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"57% used", "Authenticated", "Cached · failed"}},
-		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"x% used", "Unknown", "Unavailable · failed"}},
+		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-% used", "Unknown", "Unavailable · failed"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
