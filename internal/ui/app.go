@@ -28,7 +28,7 @@ type action int
 const (
 	actionNone action = iota
 	actionSave
-	actionRename
+	actionEditLabel
 	actionEditNote
 	actionDelete
 	actionLogout
@@ -49,11 +49,12 @@ type appModel struct {
 	cursor          int
 	invalidProfiles []profilemgr.ProfileIssue
 
-	currentProfile string
-	authActive     bool
-	appVersion     string
-	updateChecked  bool
-	updateNotice   string
+	currentProfileKey string
+	currentAuth       profilemgr.AuthSummary
+	authActive        bool
+	appVersion        string
+	updateChecked     bool
+	updateNotice      string
 
 	width  int
 	height int
@@ -125,7 +126,10 @@ func (m *appModel) reload() error {
 	}
 	m.profiles = snapshot.Profiles
 	sort.SliceStable(m.profiles, func(i, j int) bool {
-		return m.profiles[i].Plan.Rank() < m.profiles[j].Plan.Rank()
+		if m.profiles[i].Plan.Rank() != m.profiles[j].Plan.Rank() {
+			return m.profiles[i].Plan.Rank() < m.profiles[j].Plan.Rank()
+		}
+		return m.profiles[i].Label < m.profiles[j].Label
 	})
 	m.invalidProfiles = snapshot.InvalidProfiles
 
@@ -136,7 +140,8 @@ func (m *appModel) reload() error {
 	}
 
 	m.authActive = snapshot.AuthActive
-	m.currentProfile = snapshot.CurrentProfile
+	m.currentProfileKey = snapshot.CurrentProfileKey
+	m.currentAuth = snapshot.CurrentAuth
 	return nil
 }
 
@@ -158,8 +163,8 @@ func (m *appModel) selectedProfile() profilemgr.ProfileSummary {
 	return m.profiles[m.cursor]
 }
 
-func (m *appModel) selectedProfileName() string {
-	return m.selectedProfile().Name
+func (m *appModel) selectedProfileKey() string {
+	return m.selectedProfile().Key
 }
 
 func (m *appModel) setStatus(s string) {

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -219,7 +220,7 @@ func TestHandleActionErrorReloadsStateForErrStateChanged(t *testing.T) {
 	if !got.authActive {
 		t.Fatalf("authActive = false, want true after reload")
 	}
-	if len(got.profiles) != 1 || got.profiles[0].Name != "saved" {
+	if len(got.profiles) != 1 || got.profiles[0].Key != "saved" {
 		t.Fatalf("profiles = %#v, want [\"saved\"]", got.profiles)
 	}
 	if got.errText == "" {
@@ -295,35 +296,35 @@ func TestRestartRequired(t *testing.T) {
 
 func TestDeleteConfirmationPromptText(t *testing.T) {
 	tests := []struct {
-		name           string
-		profiles       []profilemgr.ProfileSummary
-		cursor         int
-		currentProfile string
-		want           string
+		name              string
+		profiles          []profilemgr.ProfileSummary
+		cursor            int
+		currentProfileKey string
+		want              string
 	}{
 		{
-			name:           "non-current profile",
-			profiles:       profileViews(testWorkProfileName, "side"),
-			cursor:         1,
-			currentProfile: testWorkProfileName,
-			want:           `Delete saved profile "side"? [y/N]`,
+			name:              "non-current profile",
+			profiles:          profileViews(testWorkProfileName, "side"),
+			cursor:            1,
+			currentProfileKey: testWorkProfileName,
+			want:              `Delete saved profile "side"? [y/N]`,
 		},
 		{
-			name:           "current profile",
-			profiles:       profileViews(testWorkProfileName, "side"),
-			cursor:         0,
-			currentProfile: testWorkProfileName,
-			want:           fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", testWorkProfileName),
+			name:              "current profile",
+			profiles:          profileViews(testWorkProfileName, "side"),
+			cursor:            0,
+			currentProfileKey: testWorkProfileName,
+			want:              fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", testWorkProfileName),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := appModel{
-				profiles:       tt.profiles,
-				cursor:         tt.cursor,
-				currentProfile: tt.currentProfile,
-				authActive:     true,
+				profiles:          tt.profiles,
+				cursor:            tt.cursor,
+				currentProfileKey: tt.currentProfileKey,
+				authActive:        true,
 			}
 
 			updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "d"}))
@@ -382,11 +383,11 @@ func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if len(m.profiles) != 1 || m.profiles[0].Name != testWorkProfileName {
+	if len(m.profiles) != 1 || m.profiles[0].Key != testWorkProfileName {
 		t.Fatalf("profiles = %#v, want [%q]", m.profiles, testWorkProfileName)
 	}
-	if m.currentProfile != testWorkProfileName {
-		t.Fatalf("currentProfile = %q, want %q", m.currentProfile, testWorkProfileName)
+	if m.currentProfileKey != testWorkProfileName {
+		t.Fatalf("currentProfileKey = %q, want %q", m.currentProfileKey, testWorkProfileName)
 	}
 	m.cursor = 0
 
@@ -394,7 +395,7 @@ func TestSelectingCurrentProfileShowsInfoStatus(t *testing.T) {
 	updatedModel, _ := m.Update(msg)
 	got := updatedModel.(appModel)
 
-	wantStatus := fmt.Sprintf("Profile %q is already active.", testWorkProfileName)
+	wantStatus := `Profile "ChatGPT account · acct" is already active.`
 	if got.status != wantStatus {
 		t.Fatalf("status = %q, want already-active message", got.status)
 	}
@@ -432,8 +433,8 @@ func TestSavingCurrentProfileShowsInfoAndSyncsTrackedProfile(t *testing.T) {
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if m.currentProfile != testWorkProfileName {
-		t.Fatalf("currentProfile = %q, want %q", m.currentProfile, testWorkProfileName)
+	if m.currentProfileKey != testWorkProfileName {
+		t.Fatalf("currentProfileKey = %q, want %q", m.currentProfileKey, testWorkProfileName)
 	}
 
 	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "s"}))
@@ -445,7 +446,7 @@ func TestSavingCurrentProfileShowsInfoAndSyncsTrackedProfile(t *testing.T) {
 	if got.pendingAction != actionNone {
 		t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionNone)
 	}
-	wantStatus := fmt.Sprintf("Current auth is already saved as profile %q.", testWorkProfileName)
+	wantStatus := `"ChatGPT account · acct" is already saved.`
 	if got.status != wantStatus {
 		t.Fatalf("status = %q, want already-saved message", got.status)
 	}
@@ -458,6 +459,91 @@ func TestSavingCurrentProfileShowsInfoAndSyncsTrackedProfile(t *testing.T) {
 	gotProfile := readTestFile(t, profilePath)
 	if string(gotProfile) != string(auth) {
 		t.Fatalf("profile = %q, want synced auth", gotProfile)
+	}
+}
+
+func TestSavingUnsavedChatGPTAuthIsImmediateAndUsesEmailLabel(t *testing.T) {
+	home := t.TempDir()
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll auth dir: %v", err)
+	}
+	if err := os.WriteFile(authPath, uiChatGPTAuth("acct-new", "person@example.com"), 0o600); err != nil {
+		t.Fatalf("WriteFile auth: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := stripANSI(m.renderHeader()); !strings.Contains(got, "person@example.com (unsaved)") {
+		t.Fatalf("header missing unsaved email label:\n%s", got)
+	}
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "s"}))
+	got := updatedModel.(appModel)
+	if got.mode != modeNormal || got.currentProfileKey == "" {
+		t.Fatalf("model = %#v, want immediately saved profile", got)
+	}
+	if !strings.HasPrefix(got.currentProfileKey, "chatgpt-") {
+		t.Fatalf("currentProfileKey = %q, want opaque ChatGPT key", got.currentProfileKey)
+	}
+	if got.status != `Saved current auth as "person@example.com".` {
+		t.Fatalf("status = %q, want email save status", got.status)
+	}
+}
+
+func TestSavingAPIKeyPromptsForOptionalLabel(t *testing.T) {
+	home := t.TempDir()
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll auth dir: %v", err)
+	}
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-ui-test"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile auth: %v", err)
+	}
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "s"}))
+	got := updatedModel.(appModel)
+	if got.mode != modeInput || got.pendingAction != actionSave {
+		t.Fatalf("mode/action = %v/%v, want API save input", got.mode, got.pendingAction)
+	}
+	if !strings.Contains(got.textInput.Prompt, "optional") {
+		t.Fatalf("prompt = %q, want optional-label guidance", got.textInput.Prompt)
+	}
+
+	updatedModel, _ = got.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	got = updatedModel.(appModel)
+	if got.currentProfileKey == "" || !strings.HasPrefix(got.currentAuth.Label, "API key · ") {
+		t.Fatalf("model = %#v, want fingerprint-labeled saved API key", got)
+	}
+}
+
+func TestRelabelingIsAvailableOnlyForAPIKeys(t *testing.T) {
+	m := appModel{
+		mode:      modeNormal,
+		textInput: newTextInput(),
+		profiles: []profilemgr.ProfileSummary{
+			{Key: "chat", Label: "person@example.com", Kind: profilemgr.AuthKindChatGPT},
+			{Key: "api", Label: "API key · 12345678", Kind: profilemgr.AuthKindAPIKey},
+		},
+	}
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "r"}))
+	got := updatedModel.(appModel)
+	if got.mode != modeNormal || got.statusKind != statusInfo || !strings.Contains(got.status, "account email") {
+		t.Fatalf("ChatGPT relabel result = %#v, want informational no-op", got)
+	}
+
+	m.cursor = 1
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "r"}))
+	got = updatedModel.(appModel)
+	if got.mode != modeInput || got.pendingAction != actionEditLabel {
+		t.Fatalf("API relabel mode/action = %v/%v, want edit-label input", got.mode, got.pendingAction)
 	}
 }
 
@@ -474,7 +560,7 @@ func TestActivatingFromCustomAuthPromptsWithoutOverwritingAuth(t *testing.T) {
 	if got.pendingAction != actionActivate {
 		t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionActivate)
 	}
-	wantPrompt := fmt.Sprintf("Current auth is not saved as a profile. Replace it with %q? [y/N]", testWorkProfileName)
+	wantPrompt := `Current auth is not saved as a profile. Replace it with "ChatGPT account · work"? [y/N]`
 	if got.confirmPrompt != wantPrompt {
 		t.Fatalf("confirmPrompt = %q, want %q", got.confirmPrompt, wantPrompt)
 	}
@@ -501,13 +587,13 @@ func TestConfirmingCustomAuthActivationActivatesProfile(t *testing.T) {
 	if got.pendingAction != actionNone {
 		t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionNone)
 	}
-	if got.currentProfile != testWorkProfileName {
-		t.Fatalf("currentProfile = %q, want %q", got.currentProfile, testWorkProfileName)
+	if got.currentProfileKey != testWorkProfileName {
+		t.Fatalf("currentProfileKey = %q, want %q", got.currentProfileKey, testWorkProfileName)
 	}
 	if !got.restartRequired {
 		t.Fatal("restartRequired = false, want true after activation")
 	}
-	wantStatus := fmt.Sprintf("Activated profile %q.", testWorkProfileName)
+	wantStatus := `Activated profile "ChatGPT account · work".`
 	if got.status != wantStatus {
 		t.Fatalf("status = %q, want activated status", got.status)
 	}
@@ -542,8 +628,8 @@ func TestCancellingCustomAuthActivationDoesNotActivateProfile(t *testing.T) {
 			if got.pendingAction != actionNone {
 				t.Fatalf("pendingAction = %v, want %v", got.pendingAction, actionNone)
 			}
-			if got.currentProfile != "" {
-				t.Fatalf("currentProfile = %q, want empty", got.currentProfile)
+			if got.currentProfileKey != "" {
+				t.Fatalf("currentProfileKey = %q, want empty", got.currentProfileKey)
 			}
 			if got.restartRequired {
 				t.Fatal("restartRequired = true, want false after cancel")
@@ -612,10 +698,10 @@ func setupCustomAuthActivationTest(t *testing.T) (appModel, string, []byte, []by
 	if !m.authActive {
 		t.Fatal("authActive = false, want true")
 	}
-	if m.currentProfile != "" {
-		t.Fatalf("currentProfile = %q, want custom/unsaved", m.currentProfile)
+	if m.currentProfileKey != "" {
+		t.Fatalf("currentProfileKey = %q, want custom/unsaved", m.currentProfileKey)
 	}
-	if len(m.profiles) != 1 || m.profiles[0].Name != testWorkProfileName {
+	if len(m.profiles) != 1 || m.profiles[0].Key != testWorkProfileName {
 		t.Fatalf("profiles = %#v, want [%q]", m.profiles, testWorkProfileName)
 	}
 	m.cursor = 0
@@ -667,7 +753,7 @@ func TestEditingProfileNoteUpdatesStatusAndView(t *testing.T) {
 	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	got := updatedModel.(appModel)
 
-	if got.status != `Updated note for "work".` {
+	if got.status != `Updated note for "ChatGPT account · acct".` {
 		t.Fatalf("status = %q, want updated-note message", got.status)
 	}
 	if got.profiles[0].Note != "updated note" {
@@ -709,7 +795,7 @@ func TestRemovingProfileNoteClearsIt(t *testing.T) {
 	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	got := updatedModel.(appModel)
 
-	if got.status != `Removed note for "work".` {
+	if got.status != `Removed note for "ChatGPT account · acct".` {
 		t.Fatalf("status = %q, want removed-note message", got.status)
 	}
 	if got.profiles[0].Note != "" {
@@ -841,7 +927,7 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 	m := appModel{
 		width: 44,
 		profiles: []profilemgr.ProfileSummary{
-			{Name: "work"},
+			{Key: "work", Label: "work"},
 		},
 	}
 
@@ -866,12 +952,12 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 
 func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 	m := appModel{
-		width:          80,
-		cursor:         0,
-		currentProfile: "work",
+		width:             80,
+		cursor:            0,
+		currentProfileKey: "work",
 		profiles: []profilemgr.ProfileSummary{
-			{Name: "work", Note: "current note", Plan: profilemgr.PlanPro},
-			{Name: "personal", Note: "other note", Plan: profilemgr.PlanFree},
+			{Key: "work", Label: "work", Note: "current note", Plan: profilemgr.PlanPro},
+			{Key: "personal", Label: "personal", Note: "other note", Plan: profilemgr.PlanFree},
 		},
 	}
 
@@ -929,8 +1015,8 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 
 	want := []string{"z-pro", "a-plus", "z-plus", "a-free"}
 	for i, name := range want {
-		if got := m.profiles[i].Name; got != name {
-			t.Fatalf("profiles[%d].Name = %q, want %q; profiles=%#v", i, got, name, m.profiles)
+		if got := m.profiles[i].Key; got != name {
+			t.Fatalf("profiles[%d].Key = %q, want %q; profiles=%#v", i, got, name, m.profiles)
 		}
 	}
 }
@@ -957,7 +1043,7 @@ func TestCyclePlanReordersAndKeepsSelectedProfile(t *testing.T) {
 	} {
 		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "p"}))
 		m = updated.(appModel)
-		if got := m.selectedProfile(); got.Name != "a-free" || got.Plan != want.plan {
+		if got := m.selectedProfile(); got.Key != "a-free" || got.Plan != want.plan {
 			t.Fatalf("selected profile = %#v, want a-free with plan %q", got, want.plan)
 		}
 		if m.cursor != want.cursor {
@@ -1001,7 +1087,7 @@ func TestFooterIncludesCyclePlanHint(t *testing.T) {
 func profileViews(names ...string) []profilemgr.ProfileSummary {
 	profiles := make([]profilemgr.ProfileSummary, len(names))
 	for i, name := range names {
-		profiles[i] = profilemgr.ProfileSummary{Name: name}
+		profiles[i] = profilemgr.ProfileSummary{Key: name, Label: name, Kind: profilemgr.AuthKindChatGPT}
 	}
 	return profiles
 }
@@ -1018,10 +1104,17 @@ func writeUIProfile(t *testing.T, home, name, accountID string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("MkdirAll profile dir: %v", err)
 	}
-	body := fmt.Sprintf(`{"auth_mode":"account","tokens":{"account_id":%q}}`, accountID)
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, name)))
+	body := fmt.Sprintf(`{"auth_mode":"account","tokens":{"account_id":%q,"id_token":%q}}`, accountID, "header."+payload+".signature")
 	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile profile: %v", err)
 	}
+}
+
+func uiChatGPTAuth(accountID, email string) []byte {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, email)))
+	body := fmt.Sprintf(`{"auth_mode":"chatgpt","tokens":{"account_id":%q,"id_token":%q}}`, accountID, "header."+payload+".signature")
+	return []byte(body + "\n")
 }
 
 func writeUIMetadata(t *testing.T, home, body string) {

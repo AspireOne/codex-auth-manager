@@ -8,7 +8,7 @@ func formatKeyHint(key, action string) string {
 
 func indexOfProfile(xs []profilemgr.ProfileSummary, target string) int {
 	for i, x := range xs {
-		if x.Name == target {
+		if x.Key == target {
 			return i
 		}
 	}

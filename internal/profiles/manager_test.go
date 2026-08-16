@@ -2,8 +2,12 @@ package profiles
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +16,10 @@ import (
 )
 
 const testProfileNameWork = "work"
+
+func expectedChatGPTStorageKey(accountID string) string {
+	return "chatgpt-" + hashString("chatgpt\x00"+accountID)
+}
 
 func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *testing.T) {
 	m, paths := newTestManager(t)
@@ -53,12 +61,12 @@ func TestManagerSaveCurrentReturnsErrStateChangedAfterProfileIsSaved(t *testing.
 	writeAuthFile(t, paths.authFile, authFixture("account-save", "api-save"))
 	makeBlockingDir(t, paths.markerFile)
 
-	err := m.SaveCurrent("saved")
+	err := m.SaveCurrent("")
 	if !errors.Is(err, ErrStateChanged) {
 		t.Fatalf("SaveCurrent error = %v, want ErrStateChanged", err)
 	}
 
-	assertFileExists(t, filepath.Join(paths.profileDir, "saved"))
+	assertFileExists(t, filepath.Join(paths.profileDir, expectedChatGPTStorageKey("account-save")))
 }
 
 func TestManagerSaveCurrentRejectsDuplicateCredentialsUnderNewName(t *testing.T) {
@@ -67,12 +75,12 @@ func TestManagerSaveCurrentRejectsDuplicateCredentialsUnderNewName(t *testing.T)
 	writeAuthFile(t, paths.authFile, auth)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "existing"), auth)
 
-	err := m.SaveCurrent("new-name")
+	err := m.SaveCurrent("")
 	if err == nil {
 		t.Fatal("SaveCurrent error = nil, want duplicate credentials error")
 	}
-	if want := `same auth already exists as profile "existing"`; err.Error() != want {
-		t.Fatalf("SaveCurrent error = %q, want %q", err.Error(), want)
+	if !strings.Contains(err.Error(), "same auth already exists as profile") {
+		t.Fatalf("SaveCurrent error = %q, want duplicate profile error", err.Error())
 	}
 
 	assertFileMissing(t, filepath.Join(paths.profileDir, "new-name"))
@@ -82,18 +90,19 @@ func TestManagerSaveCurrentAssignsStableInstallationID(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, paths.authFile, authFixture("account-save", "api-save"))
 
-	if err := m.SaveCurrent("saved"); err != nil {
+	if err := m.SaveCurrent(""); err != nil {
 		t.Fatalf("SaveCurrent() error = %v", err)
 	}
+	key := expectedChatGPTStorageKey("account-save")
 
-	firstID := assertInstallationIDMatchesProfile(t, m, paths, "saved")
+	firstID := assertInstallationIDMatchesProfile(t, m, paths, key)
 
-	if err := m.SaveCurrent("saved-again"); err == nil {
-		t.Fatal("SaveCurrent(saved-again) error = nil, want duplicate credentials error")
+	if err := m.SaveCurrent(""); err == nil {
+		t.Fatal("SaveCurrent() error = nil, want duplicate credentials error")
 	}
 
-	if err := m.Activate("saved"); err != nil {
-		t.Fatalf("Activate(saved) error = %v", err)
+	if err := m.Activate(key); err != nil {
+		t.Fatalf("Activate(%q) error = %v", key, err)
 	}
 
 	secondID := readInstallationIDFile(t, paths.installationIDFile)
@@ -102,23 +111,244 @@ func TestManagerSaveCurrentAssignsStableInstallationID(t *testing.T) {
 	}
 }
 
-func TestManagerRenameReturnsErrStateChangedAfterProfileIsRenamed(t *testing.T) {
+func TestManagerSnapshotDerivesChatGPTEmailWithoutRenamingStorage(t *testing.T) {
 	m, paths := newTestManager(t)
-	writeAuthFile(t, filepath.Join(paths.profileDir, "old"), authFixture("account-rename", "api-rename"))
-	writeMarkerFile(t, paths.markerFile, currentProfileMarker{
-		Name:     "old",
-		Identity: authIdentity{AuthMode: "account", AccountID: "account-rename"},
-	})
-	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"old": testInstallationID(1)})
-	makeBlockingDir(t, paths.markerFile)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "subjective-old-name"), chatGPTAuthFixture("acct-work", "person@example.com"))
 
-	err := m.Rename("old", "new", "old")
-	if !errors.Is(err, ErrStateChanged) {
-		t.Fatalf("Rename error = %v, want ErrStateChanged", err)
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Profiles) != 1 {
+		t.Fatalf("profiles = %#v, want one profile", snapshot.Profiles)
+	}
+	profile := snapshot.Profiles[0]
+	if profile.Key != "subjective-old-name" || profile.Label != "person@example.com" || profile.Kind != AuthKindChatGPT {
+		t.Fatalf("profile = %#v, want unchanged key with derived email label", profile)
+	}
+	assertFileExists(t, filepath.Join(paths.profileDir, "subjective-old-name"))
+}
+
+func TestManagerSnapshotFallsBackWhenChatGPTEmailIsUnavailable(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "legacy"), authFixture("acct-123456789", ""))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if got, want := snapshot.Profiles[0].Label, "ChatGPT account · 23456789"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+}
+
+func TestEmailFromIDTokenRejectsTerminalControlCharacters(t *testing.T) {
+	if got := emailFromIDToken(testIDToken("person\x1b[31m@example.com")); got != "" {
+		t.Fatalf("emailFromIDToken() = %q, want empty unsafe label", got)
+	}
+}
+
+func TestEmailFromIDTokenRejectsMalformedOrUnusableClaims(t *testing.T) {
+	tooLong := strings.Repeat("x", 255)
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{name: "empty", token: ""},
+		{name: "missing payload", token: "header"},
+		{name: "invalid base64", token: "header.%%%.signature"},
+		{name: "invalid JSON", token: "header." + base64.RawURLEncoding.EncodeToString([]byte("{")) + ".signature"},
+		{name: "missing email", token: "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user"}`)) + ".signature"},
+		{name: "empty email", token: testIDToken("   ")},
+		{name: "overlong email", token: testIDToken(tooLong)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := emailFromIDToken(tt.token); got != "" {
+				t.Fatalf("emailFromIDToken() = %q, want fallback", got)
+			}
+		})
+	}
+}
+
+func TestValidateProfileLabelTrimsAndCountsUnicodeCharacters(t *testing.T) {
+	label := strings.Repeat("ž", 64)
+	got, err := validateProfileLabel("  " + label + "  ")
+	if err != nil {
+		t.Fatalf("validateProfileLabel(64 runes) error = %v", err)
+	}
+	if got != label {
+		t.Fatalf("validated label = %q, want trimmed Unicode label", got)
+	}
+	if _, err := validateProfileLabel(label + "ž"); err == nil {
+		t.Fatal("validateProfileLabel(65 runes) error = nil")
+	}
+}
+
+func TestManagerAPIKeyLabelDefaultsToFingerprintAndCanBeEditedOrReset(t *testing.T) {
+	m, paths := newTestManager(t)
+	const key = "sk-test-secret"
+	writeAuthFile(t, filepath.Join(paths.profileDir, "legacy-api-name"), apiKeyAuthFixture(key))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	sum := sha256.Sum256([]byte(key))
+	wantDefault := "API key · " + hex.EncodeToString(sum[:])[:8]
+	if got := snapshot.Profiles[0]; got.Label != wantDefault || got.CustomLabel != "" || got.Kind != AuthKindAPIKey {
+		t.Fatalf("profile = %#v, want default API fingerprint", got)
 	}
 
-	assertFileExists(t, filepath.Join(paths.profileDir, "new"))
-	assertFileMissing(t, filepath.Join(paths.profileDir, "old"))
+	if err := m.SetLabel("legacy-api-name", "Personal project"); err != nil {
+		t.Fatalf("SetLabel() error = %v", err)
+	}
+	snapshot, err = m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() after label error = %v", err)
+	}
+	if got := snapshot.Profiles[0]; got.Label != "Personal project" || got.CustomLabel != "Personal project" {
+		t.Fatalf("profile = %#v, want custom API label", got)
+	}
+
+	if err := m.SetLabel("legacy-api-name", ""); err != nil {
+		t.Fatalf("SetLabel(reset) error = %v", err)
+	}
+	snapshot, err = m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() after reset error = %v", err)
+	}
+	if got := snapshot.Profiles[0]; got.Label != wantDefault || got.CustomLabel != "" {
+		t.Fatalf("profile = %#v, want reset API fingerprint", got)
+	}
+}
+
+func TestManagerSnapshotDisambiguatesDuplicateLabelsStably(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "first"), chatGPTAuthFixture("acct-first", "same@example.com"))
+	writeAuthFile(t, filepath.Join(paths.profileDir, "second"), chatGPTAuthFixture("acct-second", "same@example.com"))
+
+	first, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	second, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("second Snapshot() error = %v", err)
+	}
+	if first.Profiles[0].Label == first.Profiles[1].Label {
+		t.Fatalf("collision labels are equal: %#v", first.Profiles)
+	}
+	for i := range first.Profiles {
+		if !strings.HasPrefix(first.Profiles[i].Label, "same@example.com · ") {
+			t.Fatalf("label = %q, want collision suffix", first.Profiles[i].Label)
+		}
+		if first.Profiles[i].Label != second.Profiles[i].Label {
+			t.Fatalf("label changed between snapshots: %q != %q", first.Profiles[i].Label, second.Profiles[i].Label)
+		}
+	}
+}
+
+func TestManagerSnapshotDisambiguatesLabelsCaseInsensitively(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "upper"), chatGPTAuthFixture("acct-upper", "Same@Example.com"))
+	writeAuthFile(t, filepath.Join(paths.profileDir, "lower"), chatGPTAuthFixture("acct-lower", "same@example.com"))
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Profiles) != 2 {
+		t.Fatalf("profiles = %#v, want two", snapshot.Profiles)
+	}
+	if strings.EqualFold(snapshot.Profiles[0].Label, snapshot.Profiles[1].Label) {
+		t.Fatalf("effective labels still collide case-insensitively: %#v", snapshot.Profiles)
+	}
+}
+
+func TestManagerSnapshotResolvesCollisionWithGeneratedEffectiveLabel(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "first"), chatGPTAuthFixture("acct-first", "shared@example.com"))
+	writeAuthFile(t, filepath.Join(paths.profileDir, "second"), chatGPTAuthFixture("acct-second", "shared@example.com"))
+
+	firstIdentity, err := readAuthIdentity(filepath.Join(paths.profileDir, "first"))
+	if err != nil {
+		t.Fatalf("readAuthIdentity(first) error = %v", err)
+	}
+	generatedLabel := "shared@example.com · " + shortHead(hashString(canonicalIdentity(firstIdentity)), 8)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "api"), apiKeyAuthFixture("sk-collision"))
+	writeProfileMetadataFile(t, paths.metadataFile, map[string]profileMetadata{
+		"api": {Label: generatedLabel},
+	})
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	seen := make(map[string]struct{})
+	for _, profile := range snapshot.Profiles {
+		key := strings.ToLower(profile.Label)
+		if _, exists := seen[key]; exists {
+			t.Fatalf("duplicate effective label %q in %#v", profile.Label, snapshot.Profiles)
+		}
+		seen[key] = struct{}{}
+	}
+	if api := profileByKey(snapshot.Profiles, "api"); api == nil || api.Label == generatedLabel {
+		t.Fatalf("API label = %#v, want globally disambiguated label", api)
+	}
+}
+
+func TestManagerSaveCurrentUsesOpaqueKeyAndPersistsOptionalAPIKeyLabel(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, paths.authFile, apiKeyAuthFixture("sk-save-me"))
+	descriptor, err := readAuthDescriptor(paths.authFile)
+	if err != nil {
+		t.Fatalf("readAuthDescriptor() error = %v", err)
+	}
+	wantKey := storageKeyForIdentity(descriptor)
+
+	if err := m.SaveCurrent("Personal project"); err != nil {
+		t.Fatalf("SaveCurrent() error = %v", err)
+	}
+	assertFileExists(t, filepath.Join(paths.profileDir, wantKey))
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.CurrentProfileKey != wantKey || snapshot.CurrentAuth.Label != "Personal project" {
+		t.Fatalf("snapshot = %#v, want saved API profile", snapshot)
+	}
+}
+
+func TestManagerSaveCurrentRejectsRefreshedDuplicateIdentity(t *testing.T) {
+	m, paths := newTestManager(t)
+	existing := chatGPTAuthFixture("acct-same", "same@example.com")
+	existing["updated"] = false
+	current := chatGPTAuthFixture("acct-same", "same@example.com")
+	current["updated"] = true
+	writeAuthFile(t, filepath.Join(paths.profileDir, "existing"), existing)
+	writeAuthFile(t, paths.authFile, current)
+
+	err := m.SaveCurrent("")
+	if err == nil || !strings.Contains(err.Error(), "same auth already exists as profile") {
+		t.Fatalf("SaveCurrent() error = %v, want identity duplicate error", err)
+	}
+}
+
+func TestManagerSetLabelRejectsChatGPTAndInvalidAPILabels(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "chatgpt"), chatGPTAuthFixture("acct", "person@example.com"))
+	writeAuthFile(t, filepath.Join(paths.profileDir, "apikey"), apiKeyAuthFixture("sk-test"))
+
+	if err := m.SetLabel("chatgpt", "Work"); err == nil || !strings.Contains(err.Error(), "account email") {
+		t.Fatalf("SetLabel(ChatGPT) error = %v, want account-email error", err)
+	}
+	if err := m.SetLabel("apikey", "line one\nline two"); err == nil || !strings.Contains(err.Error(), "single line") {
+		t.Fatalf("SetLabel(multiline) error = %v, want single-line error", err)
+	}
+	if err := m.SetLabel("apikey", strings.Repeat("x", 65)); err == nil || !strings.Contains(err.Error(), "64 characters") {
+		t.Fatalf("SetLabel(long) error = %v, want length error", err)
+	}
 }
 
 func TestManagerDeleteReturnsErrStateChangedAfterProfileIsDeleted(t *testing.T) {
@@ -221,6 +451,47 @@ func TestManagerSyncTrackedProfileCopiesChangedAuthWhenIdentityStillMatches(t *t
 	assertInstallationIDMatchesProfile(t, m, paths, profileName)
 }
 
+func TestManagerSnapshotResolvesChatGPTProfileAcrossAuthModeChange(t *testing.T) {
+	m, paths := newTestManager(t)
+	saved := chatGPTAuthFixture("acct-same", "same@example.com")
+	saved["auth_mode"] = "account"
+	current := chatGPTAuthFixture("acct-same", "same@example.com")
+	writeAuthFile(t, filepath.Join(paths.profileDir, "legacy"), saved)
+	writeAuthFile(t, paths.authFile, current)
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.CurrentProfileKey != "legacy" {
+		t.Fatalf("CurrentProfileKey = %q, want legacy", snapshot.CurrentProfileKey)
+	}
+	if snapshot.CurrentAuth.Label != "same@example.com" {
+		t.Fatalf("CurrentAuth.Label = %q, want email label", snapshot.CurrentAuth.Label)
+	}
+}
+
+func TestManagerSyncTrackedAPIKeyProfileAcrossAuthModeChange(t *testing.T) {
+	m, paths := newTestManager(t)
+	saved := apiKeyAuthFixture("sk-same")
+	saved["auth_mode"] = ""
+	current := apiKeyAuthFixture("sk-same")
+	current["updated"] = true
+	profilePath := filepath.Join(paths.profileDir, "legacy-api")
+	writeAuthFile(t, profilePath, saved)
+	writeAuthFile(t, paths.authFile, current)
+	identity, err := readAuthIdentity(profilePath)
+	if err != nil {
+		t.Fatalf("readAuthIdentity() error = %v", err)
+	}
+	writeMarkerFile(t, paths.markerFile, currentProfileMarker{Name: "legacy-api", Identity: identity})
+
+	if err := m.SyncTrackedProfile(); err != nil {
+		t.Fatalf("SyncTrackedProfile() error = %v", err)
+	}
+	assertFilesEqual(t, profilePath, paths.authFile)
+}
+
 func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
 	codexDir := t.TempDir()
 	m := NewManager(codexDir)
@@ -240,6 +511,34 @@ func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
 	assertDirExists(t, filepath.Join(codexDir, "auth_manager", "profiles"))
 }
 
+func TestManagerSnapshotSecuresExistingDirectoriesAndManagedFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
+	m, paths := newTestManager(t)
+	profilePath := filepath.Join(paths.profileDir, "world-readable-api")
+	writeAuthFile(t, profilePath, apiKeyAuthFixture("sk-permissions"))
+	writeAuthFile(t, paths.authFile, apiKeyAuthFixture("sk-permissions"))
+	writeProfileMetadataFile(t, paths.metadataFile, map[string]profileMetadata{
+		"world-readable-api": {Label: "Permissions test"},
+	})
+	for _, path := range []string{filepath.Dir(paths.profileDir), paths.profileDir, profilePath, paths.authFile, paths.metadataFile} {
+		if err := os.Chmod(path, 0o777); err != nil {
+			t.Fatalf("Chmod(%q): %v", path, err)
+		}
+	}
+
+	if _, err := m.Snapshot(); err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	for _, path := range []string{filepath.Dir(paths.profileDir), paths.profileDir} {
+		assertFileMode(t, path, 0o700)
+	}
+	for _, path := range []string{profilePath, paths.authFile, paths.metadataFile, paths.markerFile, paths.installationIDFile} {
+		assertFileMode(t, path, 0o600)
+	}
+}
+
 func TestManagerSnapshotIgnoresStaleCurrentProfileMarker(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, paths.authFile, authFixture("account-active", "api-active"))
@@ -256,8 +555,8 @@ func TestManagerSnapshotIgnoresStaleCurrentProfileMarker(t *testing.T) {
 	if !snapshot.AuthActive {
 		t.Fatalf("Snapshot().AuthActive = false, want true")
 	}
-	if snapshot.CurrentProfile != "" {
-		t.Fatalf("Snapshot().CurrentProfile = %q, want empty", snapshot.CurrentProfile)
+	if snapshot.CurrentProfileKey != "" {
+		t.Fatalf("Snapshot().CurrentProfileKey = %q, want empty", snapshot.CurrentProfileKey)
 	}
 }
 
@@ -295,8 +594,8 @@ func TestManagerSnapshotClearsInstallationIDWhenAuthIsUnsaved(t *testing.T) {
 		t.Fatalf("Snapshot() error = %v", err)
 	}
 
-	if snapshot.CurrentProfile != "" {
-		t.Fatalf("Snapshot().CurrentProfile = %q, want empty", snapshot.CurrentProfile)
+	if snapshot.CurrentProfileKey != "" {
+		t.Fatalf("Snapshot().CurrentProfileKey = %q, want empty", snapshot.CurrentProfileKey)
 	}
 	assertFileMissing(t, paths.installationIDFile)
 }
@@ -317,8 +616,8 @@ func TestManagerSnapshotRepairsActiveInstallationIDForTrackedProfile(t *testing.
 		t.Fatalf("Snapshot() error = %v", err)
 	}
 
-	if snapshot.CurrentProfile != testProfileNameWork {
-		t.Fatalf("Snapshot().CurrentProfile = %q, want work", snapshot.CurrentProfile)
+	if snapshot.CurrentProfileKey != testProfileNameWork {
+		t.Fatalf("Snapshot().CurrentProfileKey = %q, want work", snapshot.CurrentProfileKey)
 	}
 	if got := readInstallationIDFile(t, paths.installationIDFile); got != testInstallationID(2) {
 		t.Fatalf("installation_id = %q, want %q", got, testInstallationID(2))
@@ -342,8 +641,8 @@ func TestManagerSnapshotIgnoresMalformedInstallationIDsFile(t *testing.T) {
 		t.Fatalf("Snapshot() error = %v", err)
 	}
 
-	if snapshot.CurrentProfile != testProfileNameWork {
-		t.Fatalf("Snapshot().CurrentProfile = %q, want work", snapshot.CurrentProfile)
+	if snapshot.CurrentProfileKey != testProfileNameWork {
+		t.Fatalf("Snapshot().CurrentProfileKey = %q, want work", snapshot.CurrentProfileKey)
 	}
 	assertInstallationIDMatchesProfile(t, m, paths, testProfileNameWork)
 }
@@ -509,38 +808,6 @@ func TestManagerSnapshotRejectsMalformedMetadataWithoutRemovingLegacyNotes(t *te
 	assertFileExists(t, paths.legacyNotesFile)
 }
 
-func TestManagerRenameMovesMetadata(t *testing.T) {
-	m, paths := newTestManager(t)
-	writeAuthFile(t, filepath.Join(paths.profileDir, "old"), authFixture("account-rename", "api-rename"))
-	writeProfileMetadataFile(t, paths.metadataFile, map[string]profileMetadata{
-		"old": {Note: "tracked", Plan: PlanPro},
-	})
-	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"old": testInstallationID(1)})
-
-	if err := m.Rename("old", "new", ""); err != nil {
-		t.Fatalf("Rename() error = %v", err)
-	}
-
-	snapshot, err := m.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	assertProfiles(t, snapshot.Profiles, []string{"new"})
-	if got := snapshot.Profiles[0].Note; got != "tracked" {
-		t.Fatalf("renamed note = %q, want %q", got, "tracked")
-	}
-	if got := snapshot.Profiles[0].Plan; got != PlanPro {
-		t.Fatalf("renamed plan = %q, want %q", got, PlanPro)
-	}
-	ids := readInstallationIDsFile(t, paths.installationIDsFile)
-	if got := ids["new"]; got != testInstallationID(1) {
-		t.Fatalf("installation ID for new = %q, want %q", got, testInstallationID(1))
-	}
-	if _, ok := ids["old"]; ok {
-		t.Fatalf("installation IDs still contain old key: %#v", ids)
-	}
-}
-
 func TestManagerDeleteRemovesMetadata(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
@@ -606,6 +873,28 @@ func authFixture(accountID, apiKey string) map[string]any {
 			"account_id": accountID,
 		},
 	}
+}
+
+func chatGPTAuthFixture(accountID, email string) map[string]any {
+	return map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"account_id": accountID,
+			"id_token":   testIDToken(email),
+		},
+	}
+}
+
+func apiKeyAuthFixture(apiKey string) map[string]any {
+	return map[string]any{
+		"auth_mode":      "apikey",
+		"OPENAI_API_KEY": apiKey,
+	}
+}
+
+func testIDToken(email string) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, email)))
+	return "header." + payload + ".signature"
 }
 
 func realisticAuthFixture(accountID, accessToken, refreshToken, apiURL string) map[string]any {
@@ -757,6 +1046,18 @@ func assertDirExists(t *testing.T, path string) {
 	}
 }
 
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode of %q = %o, want %o", path, got, want)
+	}
+}
+
 func assertProfiles(t *testing.T, got []ProfileSummary, want []string) {
 	t.Helper()
 
@@ -764,7 +1065,7 @@ func assertProfiles(t *testing.T, got []ProfileSummary, want []string) {
 		t.Fatalf("profiles = %#v, want %#v", got, want)
 	}
 	for i := range want {
-		if got[i].Name != want[i] {
+		if got[i].Key != want[i] {
 			t.Fatalf("profiles = %#v, want %#v", got, want)
 		}
 	}

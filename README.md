@@ -8,11 +8,12 @@
 
 It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on Linux/macOS, `%USERPROFILE%\.codex\auth.json` on Windows) and lets you quickly:
 
-- save the current auth file as a named profile
+- save ChatGPT auth automatically under its account identity
+- save API-key auth with an optional label or automatic fingerprint
 - activate another saved profile
 - assign Free, Plus, or Pro plans with paid plans grouped first
 - add a short note to a profile for quick context
-- rename or delete saved profiles
+- edit API-key labels or delete saved profiles
 - log out by removing the active `auth.json`
 
 This is useful if you regularly work with multiple Codex accounts and want a faster way to swap between them without logging out/in constantly or manually copying auth files around.
@@ -122,9 +123,13 @@ codex-manage --list
 codex-manage -l
 ```
 
-Activate a saved profile by name:
+Activate a saved profile by its displayed label:
 
 ```sh
-codex-manage --select work
-codex-manage -s work
+codex-manage --select matej@example.com
+codex-manage -s "Personal API project"
 ```
+
+ChatGPT labels come from the email claim in `auth.json`; if it is unavailable, the UI shows a shortened account ID. API-key profiles use an optional custom label and otherwise show a non-secret SHA-256 fingerprint. Profile filenames are opaque internal keys and are not accepted by `--select`.
+
+Saved profiles are restrictive copies of Codex's `auth.json`. This means API keys remain stored in plaintext with `0600` permissions, matching Codex's own representation.

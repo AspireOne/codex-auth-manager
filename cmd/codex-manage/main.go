@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/ui"
@@ -28,8 +29,8 @@ func run(args []string, stdout, stderr io.Writer, userHomeDir func() (string, er
 	flags.BoolVar(&showVersion, "version", false, "print version and exit")
 	flags.BoolVar(&list, "list", false, "list available profiles and exit")
 	flags.BoolVar(&list, "l", false, "list available profiles and exit")
-	flags.StringVar(&selectLong, "select", "", "select the profile by name and exit")
-	flags.StringVar(&selectShort, "s", "", "select the profile by name and exit")
+	flags.StringVar(&selectLong, "select", "", "select the profile by label and exit")
+	flags.StringVar(&selectShort, "s", "", "select the profile by label and exit")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -78,11 +79,16 @@ func run(args []string, stdout, stderr io.Writer, userHomeDir func() (string, er
 			}
 			return 0
 		}
-		if err := manager.Activate(selectedProfile); err != nil {
+		profile, err := profileByLabel(manager, selectedProfile)
+		if err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}
-		_, _ = fmt.Fprintf(stdout, "Activated profile %q.\n", selectedProfile)
+		if err := manager.Activate(profile.Key); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(stdout, "Activated profile %q.\n", profile.Label)
 		return 0
 	}
 
@@ -126,11 +132,39 @@ func listProfiles(manager profilemgr.Manager, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	for _, profile := range snapshot.Profiles {
-		_, _ = fmt.Fprintln(stdout, profile.Name)
+	profiles := append([]profilemgr.ProfileSummary(nil), snapshot.Profiles...)
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Label < profiles[j].Label })
+	for _, profile := range profiles {
+		_, _ = fmt.Fprintln(stdout, profile.Label)
 	}
 	for _, issue := range snapshot.InvalidProfiles {
 		_, _ = fmt.Fprintf(stderr, "warning: ignored invalid profile %q: %s\n", issue.Name, issue.Reason)
 	}
 	return nil
+}
+
+func profileByLabel(manager profilemgr.Manager, label string) (profilemgr.ProfileSummary, error) {
+	snapshot, err := manager.Snapshot()
+	if err != nil {
+		return profilemgr.ProfileSummary{}, err
+	}
+	return uniqueProfileByLabel(snapshot.Profiles, label)
+}
+
+func uniqueProfileByLabel(profiles []profilemgr.ProfileSummary, label string) (profilemgr.ProfileSummary, error) {
+	var match profilemgr.ProfileSummary
+	matches := 0
+	for _, profile := range profiles {
+		if profile.Label == label {
+			match = profile
+			matches++
+		}
+	}
+	if matches > 1 {
+		return profilemgr.ProfileSummary{}, fmt.Errorf("profile label %q is ambiguous", label)
+	}
+	if matches == 1 {
+		return match, nil
+	}
+	return profilemgr.ProfileSummary{}, fmt.Errorf("profile label %q not found", label)
 }

@@ -78,7 +78,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		return m.enterRenameMode()
+		return m.enterEditLabelMode()
 
 	case "n":
 		return m.enterEditNoteMode()
@@ -91,7 +91,7 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No active auth.json to save.")
 			return m, nil
 		}
-		if m.currentProfile != "" {
+		if m.currentProfileKey != "" {
 			if err := m.syncTrackedProfile(); err != nil {
 				m.setError(err.Error())
 				return m, nil
@@ -100,20 +100,23 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.setError(err.Error())
 				return m, nil
 			}
-			m.setInfo(fmt.Sprintf("Current auth is already saved as profile %q.", m.currentProfile))
+			m.setInfo(fmt.Sprintf("%q is already saved.", m.currentAuth.Label))
 			return m, nil
 		}
-		return m.enterInput(actionSave, "Save current auth as profile:", "")
+		if m.currentAuth.Kind == profilemgr.AuthKindAPIKey {
+			return m.enterInput(actionSave, "API key label (optional; blank uses fingerprint):", "")
+		}
+		return m.saveCurrent(""), nil
 
 	case "d":
 		if len(m.profiles) == 0 {
 			m.setError("No profiles to delete.")
 			return m, nil
 		}
-		name := m.selectedProfileName()
-		prompt := fmt.Sprintf("Delete saved profile %q? [y/N]", name)
-		if name == m.currentProfile {
-			prompt = fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", name)
+		selected := m.selectedProfile()
+		prompt := fmt.Sprintf("Delete saved profile %q? [y/N]", selected.Label)
+		if selected.Key == m.currentProfileKey {
+			prompt = fmt.Sprintf("Delete saved profile %q? Current login stays active. [y/N]", selected.Label)
 		}
 		return m.enterConfirm(actionDelete, prompt), nil
 
@@ -129,15 +132,15 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError("No profiles to activate.")
 			return m, nil
 		}
-		name := m.selectedProfileName()
-		if name == m.currentProfile {
-			m.setInfo(fmt.Sprintf("Profile %q is already active.", name))
+		selected := m.selectedProfile()
+		if selected.Key == m.currentProfileKey {
+			m.setInfo(fmt.Sprintf("Profile %q is already active.", selected.Label))
 			return m, nil
 		}
-		if m.authActive && m.currentProfile == "" {
-			return m.enterConfirm(actionActivate, fmt.Sprintf("Current auth is not saved as a profile. Replace it with %q? [y/N]", name)), nil
+		if m.authActive && m.currentProfileKey == "" {
+			return m.enterConfirm(actionActivate, fmt.Sprintf("Current auth is not saved as a profile. Replace it with %q? [y/N]", selected.Label)), nil
 		}
-		return m.activateProfile(name), nil
+		return m.activateProfile(selected.Key), nil
 
 	case "F5", "ctrl+r":
 		if err := m.syncTrackedProfile(); err != nil {
@@ -167,34 +170,27 @@ func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case actionNone, actionDelete, actionLogout, actionActivate:
 				return m.exitMode(), nil
 			case actionSave:
-				if err := m.profileManager.SaveCurrent(value); err != nil {
-					return m.handleActionError(err), nil
-				}
-				if err := m.reload(); err != nil {
-					m.setError(err.Error())
-					return m.exitMode(), nil
-				}
-				m.setStatus(fmt.Sprintf("Saved current auth as %q.", value))
+				m = m.saveCurrent(value)
 				return m.exitMode(), nil
 
-			case actionRename:
-				oldName := m.selectedProfileName()
-				if err := m.profileManager.Rename(oldName, value, m.currentProfile); err != nil {
+			case actionEditLabel:
+				selected := m.selectedProfile()
+				if err := m.profileManager.SetLabel(selected.Key, value); err != nil {
 					return m.handleActionError(err), nil
 				}
 				if err := m.reload(); err != nil {
 					m.setError(err.Error())
 					return m.exitMode(), nil
 				}
-				m.cursor = indexOfProfile(m.profiles, value)
+				m.cursor = indexOfProfile(m.profiles, selected.Key)
 				if m.cursor < 0 {
 					m.cursor = 0
 				}
-				m.setStatus(fmt.Sprintf("Renamed %q to %q.", oldName, value))
+				m.setStatus(fmt.Sprintf("Updated API key label to %q.", m.selectedProfile().Label))
 				return m.exitMode(), nil
 			case actionEditNote:
-				name := m.selectedProfileName()
-				if err := m.profileManager.SetNote(name, value); err != nil {
+				selected := m.selectedProfile()
+				if err := m.profileManager.SetNote(selected.Key, value); err != nil {
 					return m.handleActionError(err), nil
 				}
 				if err := m.reload(); err != nil {
@@ -202,9 +198,9 @@ func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.exitMode(), nil
 				}
 				if value == "" {
-					m.setStatus(fmt.Sprintf("Removed note for %q.", name))
+					m.setStatus(fmt.Sprintf("Removed note for %q.", selected.Label))
 				} else {
-					m.setStatus(fmt.Sprintf("Updated note for %q.", name))
+					m.setStatus(fmt.Sprintf("Updated note for %q.", selected.Label))
 				}
 				return m.exitMode(), nil
 			}
@@ -224,15 +220,14 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "y":
 		switch m.pendingAction {
-		case actionNone, actionSave, actionRename, actionEditNote:
+		case actionNone, actionSave, actionEditLabel, actionEditNote:
 			return m.exitMode(), nil
 		case actionActivate:
-			name := m.selectedProfileName()
-			m = m.activateProfile(name)
+			m = m.activateProfile(m.selectedProfileKey())
 			return m.exitMode(), nil
 		case actionDelete:
-			name := m.selectedProfileName()
-			if err := m.profileManager.Delete(name, m.currentProfile); err != nil {
+			selected := m.selectedProfile()
+			if err := m.profileManager.Delete(selected.Key, m.currentProfileKey); err != nil {
 				return m.handleActionError(err), nil
 			}
 			if err := m.reload(); err != nil {
@@ -242,7 +237,7 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.cursor >= len(m.profiles) && m.cursor > 0 {
 				m.cursor--
 			}
-			m.setStatus(fmt.Sprintf("Deleted profile %q.", name))
+			m.setStatus(fmt.Sprintf("Deleted profile %q.", selected.Label))
 			return m.exitMode(), nil
 
 		case actionLogout:
@@ -262,12 +257,17 @@ func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModel) enterRenameMode() (tea.Model, tea.Cmd) {
+func (m appModel) enterEditLabelMode() (tea.Model, tea.Cmd) {
 	if len(m.profiles) == 0 {
-		m.setError("No profiles to rename.")
+		m.setError("No profiles to edit.")
 		return m, nil
 	}
-	return m.enterInput(actionRename, fmt.Sprintf("Rename profile %q to:", m.selectedProfileName()), m.selectedProfileName())
+	selected := m.selectedProfile()
+	if selected.Kind != profilemgr.AuthKindAPIKey {
+		m.setInfo("ChatGPT profile labels come from the account email.")
+		return m, nil
+	}
+	return m.enterInput(actionEditLabel, fmt.Sprintf("Edit API key label for %q (blank uses fingerprint):", selected.Label), selected.CustomLabel)
 }
 
 func (m appModel) enterEditNoteMode() (tea.Model, tea.Cmd) {
@@ -276,7 +276,7 @@ func (m appModel) enterEditNoteMode() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	selected := m.selectedProfile()
-	return m.enterInput(actionEditNote, fmt.Sprintf("Edit note for %q:", selected.Name), selected.Note)
+	return m.enterInput(actionEditNote, fmt.Sprintf("Edit note for %q:", selected.Label), selected.Note)
 }
 
 func (m appModel) cycleSelectedPlan() appModel {
@@ -287,28 +287,41 @@ func (m appModel) cycleSelectedPlan() appModel {
 
 	selected := m.selectedProfile()
 	nextPlan := selected.Plan.Next()
-	if err := m.profileManager.SetPlan(selected.Name, nextPlan); err != nil {
+	if err := m.profileManager.SetPlan(selected.Key, nextPlan); err != nil {
 		return m.handleActionError(err)
 	}
 	if err := m.reload(); err != nil {
 		m.setError(err.Error())
 		return m
 	}
-	m.cursor = indexOfProfile(m.profiles, selected.Name)
+	m.cursor = indexOfProfile(m.profiles, selected.Key)
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
-	m.setStatus(fmt.Sprintf("Set plan for %q to %s.", selected.Name, nextPlan.Label()))
+	m.setStatus(fmt.Sprintf("Set plan for %q to %s.", selected.Label, nextPlan.Label()))
 	return m
 }
 
-func (m *appModel) activateProfile(name string) appModel {
-	if err := m.activateSelectedProfile(name); err != nil {
+func (m *appModel) activateProfile(key string) appModel {
+	selected := m.selectedProfile()
+	if err := m.activateSelectedProfile(key); err != nil {
 		m.setError(err.Error())
 		return *m
 	}
-	m.setStatus(fmt.Sprintf("Activated profile %q.", name))
+	m.setStatus(fmt.Sprintf("Activated profile %q.", selected.Label))
 	m.restartRequired = true
+	return *m
+}
+
+func (m *appModel) saveCurrent(label string) appModel {
+	if err := m.profileManager.SaveCurrent(label); err != nil {
+		return m.handleActionError(err)
+	}
+	if err := m.reload(); err != nil {
+		m.setError(err.Error())
+		return *m
+	}
+	m.setStatus(fmt.Sprintf("Saved current auth as %q.", m.currentAuth.Label))
 	return *m
 }
 

@@ -33,10 +33,14 @@ func (m appModel) View() tea.View {
 func (m appModel) renderHeader() string {
 	current := "none"
 	if m.authActive {
-		if m.currentProfile != "" {
-			current = m.currentProfile
+		if m.currentProfileKey != "" {
+			current = m.currentAuth.Label
 		} else {
-			current = "custom/unsaved"
+			current = m.currentAuth.Label
+			if current == "" {
+				current = "custom auth"
+			}
+			current += " (unsaved)"
 		}
 	}
 
@@ -87,7 +91,7 @@ func (m appModel) renderList() string {
 			style = selectedItemStyle
 		}
 
-		lines = append(lines, m.renderProfileLine(style, prefix, p.Name, p.Note, p.Plan, p.Name == m.currentProfile, profileColumnWidth))
+		lines = append(lines, m.renderProfileLine(style, prefix, p.Label, p.Note, p.Plan, p.Key == m.currentProfileKey, profileColumnWidth))
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
@@ -172,7 +176,7 @@ func (m appModel) profileColumnWidth() int {
 			prefix = "» "
 		}
 
-		lineWidth := lipgloss.Width(prefix+p.Name) + markerWidth
+		lineWidth := lipgloss.Width(prefix+p.Label) + markerWidth
 		if lineWidth > width {
 			width = lineWidth
 		}
@@ -232,9 +236,11 @@ func (m appModel) renderFooter() string {
 		}
 		profileCommands := []string{
 			formatKeyHint("n", "edit note"),
-			formatKeyHint("r", "rename"),
-			formatKeyHint("d", "delete"),
 		}
+		if m.selectedProfile().Kind == profilemgr.AuthKindAPIKey {
+			profileCommands = append(profileCommands, formatKeyHint("r", "edit label"))
+		}
+		profileCommands = append(profileCommands, formatKeyHint("d", "delete"))
 		globalCommands := []string{
 			formatKeyHint("s", "save"),
 			formatKeyHint("l", "logout"),

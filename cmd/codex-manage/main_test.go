@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	profilemgr "codex-manage/internal/profiles"
 )
 
 func TestRunListPrintsAvailableProfiles(t *testing.T) {
@@ -29,7 +32,7 @@ func TestRunListPrintsAvailableProfiles(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if got, want := stdout.String(), "personal\nwork\n"; got != want {
+	if got, want := stdout.String(), "acct-personal@example.com\nacct-work@example.com\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if stderr.String() != "" {
@@ -54,7 +57,7 @@ func TestRunListPrintsInvalidProfilesToStderr(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if got, want := stdout.String(), "work\n"; got != want {
+	if got, want := stdout.String(), "acct-work@example.com\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); !strings.Contains(got, `warning: ignored invalid profile "corrupt": invalid JSON`) {
@@ -70,14 +73,14 @@ func TestRunSelectActivatesProfile(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := run([]string{"--select", "work"}, &stdout, &stderr, func() (string, error) {
+	code := run([]string{"--select", "acct-work@example.com"}, &stdout, &stderr, func() (string, error) {
 		return home, nil
 	}, failUIRun(t))
 
 	if code != 0 {
 		t.Fatalf("run() code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if got, want := stdout.String(), "Activated profile \"work\".\n"; got != want {
+	if got, want := stdout.String(), "Activated profile \"acct-work@example.com\".\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	assertCLIFileEqual(t, filepath.Join(codexDir, "auth.json"), profilePath)
@@ -99,7 +102,7 @@ func TestRunSelectSwitchesInstallationIDByProfile(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := run([]string{"--select", "work"}, &stdout, &stderr, func() (string, error) {
+	if code := run([]string{"--select", "acct-work@example.com"}, &stdout, &stderr, func() (string, error) {
 		return home, nil
 	}, failUIRun(t)); code != 0 {
 		t.Fatalf("run(work) code = %d, want 0; stderr=%q", code, stderr.String())
@@ -108,7 +111,7 @@ func TestRunSelectSwitchesInstallationIDByProfile(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"--select", "personal"}, &stdout, &stderr, func() (string, error) {
+	if code := run([]string{"--select", "acct-personal@example.com"}, &stdout, &stderr, func() (string, error) {
 		return home, nil
 	}, failUIRun(t)); code != 0 {
 		t.Fatalf("run(personal) code = %d, want 0; stderr=%q", code, stderr.String())
@@ -134,8 +137,61 @@ func TestRunSelectMissingProfileReturnsError(t *testing.T) {
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if got := stderr.String(); !strings.Contains(got, `profile "missing" not found`) {
+	if got := stderr.String(); !strings.Contains(got, `profile label "missing" not found`) {
 		t.Fatalf("stderr = %q, want missing profile error", got)
+	}
+}
+
+func TestUniqueProfileByLabelRejectsAmbiguousMatches(t *testing.T) {
+	profiles := []profilemgr.ProfileSummary{
+		{Key: "first", Label: "duplicate"},
+		{Key: "second", Label: "duplicate"},
+	}
+
+	_, err := uniqueProfileByLabel(profiles, "duplicate")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("uniqueProfileByLabel() error = %v, want ambiguity error", err)
+	}
+}
+
+func TestRunSelectDoesNotAcceptStorageKeyAlias(t *testing.T) {
+	home := t.TempDir()
+	writeCLIAuthFile(t, filepath.Join(home, ".codex", "auth_manager", "profiles", "work"), "acct-work")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--select", "work"}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t))
+
+	if code != 1 || !strings.Contains(stderr.String(), `profile label "work" not found`) {
+		t.Fatalf("code/stderr = %d/%q, want rejected storage-key selector", code, stderr.String())
+	}
+}
+
+func TestRunSelectAcceptsQuotedAPIKeyLabelWithSpaces(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	profileDir := filepath.Join(codexDir, "auth_manager", "profiles")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "legacy-api"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-cli"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile API profile: %v", err)
+	}
+	metadataPath := filepath.Join(codexDir, "auth_manager", ".profile-metadata.json")
+	if err := os.WriteFile(metadataPath, []byte(`{"legacy-api":{"label":"Personal project"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile metadata: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--select", "Personal project"}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t))
+
+	if code != 0 || stdout.String() != "Activated profile \"Personal project\".\n" {
+		t.Fatalf("code/stdout/stderr = %d/%q/%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -207,6 +263,7 @@ func writeCLIAuthFile(t *testing.T, path, accountID string) {
 		"auth_mode": "account",
 		"tokens": map[string]any{
 			"account_id": accountID,
+			"id_token":   cliIDToken(accountID + "@example.com"),
 		},
 	}
 	data, err := json.Marshal(body)
@@ -219,6 +276,11 @@ func writeCLIAuthFile(t *testing.T, path, accountID string) {
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
+}
+
+func cliIDToken(email string) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, email)))
+	return "header." + payload + ".signature"
 }
 
 func assertCLIFileEqual(t *testing.T, gotPath, wantPath string) {

@@ -38,14 +38,14 @@ Enter
 Wait+Screen /Codex Auth Manager/
 Sleep 1800ms
 
-# Save the current custom auth as a reusable profile.
+# Save the current API-key auth with an optional label.
 Type "s"
-Wait+Screen /Save current auth as profile:/
+Wait+Screen /API key label \(optional; blank uses fingerprint\):/
 Sleep 900ms
-Type "demo"
+Type "demo-key"
 Sleep 600ms
 Enter
-Wait+Screen /Saved current auth as "demo"\./
+Wait+Screen /Saved current auth as "demo-key"\./
 Sleep 1800ms
 
 # Move to an existing profile and activate it.
@@ -54,39 +54,39 @@ Sleep 900ms
 Down
 Sleep 900ms
 Enter
-Wait+Screen /Activated profile "work"\./
+Wait+Screen /Activated profile "work@example.com"\./
 Sleep 2200ms
 
 # Add a note to the active profile and show it inline in the list.
 Type "n"
-Wait+Screen /Edit note for "work":/
+Wait+Screen /Edit note for "work@example.com":/
 Sleep 900ms
 Type "Plus trial ends soon"
 Sleep 600ms
 Enter
-Wait+Screen /Updated note for "work"\./
+Wait+Screen /Updated note for "work@example.com"\./
 Sleep 2400ms
 
-# Rename the active profile.
+# Return to the API-key profile and edit its label.
+Up
+Sleep 900ms
+Up
+Sleep 900ms
 Type "r"
-Wait+Screen /Rename profile "work" to:/
+Wait+Screen /Edit API key label for "demo-key"/
 Sleep 900ms
 Type "-main"
 Sleep 600ms
 Enter
-Wait+Screen /Renamed "work" to "work-main"\./
+Wait+Screen /Updated API key label to "demo-key-main"\./
 Sleep 2200ms
 
 # Delete the temporary demo profile.
-Up
-Sleep 900ms
-Up
-Sleep 900ms
 Type "d"
-Wait+Screen /Delete saved profile "demo"\? \[y\/N\]/
+Wait+Screen /Delete saved profile "demo-key-main"\? \[y\/N\]/
 Sleep 1100ms
 Type "y"
-Wait+Screen /Deleted profile "demo"\./
+Wait+Screen /Deleted profile "demo-key-main"\./
 Sleep 1800ms
 
 # Log out by removing the active auth.json.

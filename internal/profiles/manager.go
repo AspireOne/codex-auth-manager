@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const CurrentProfileMarkerName = "current-profile"
@@ -23,17 +26,37 @@ const profileInstallationIDsFileName = ".profile-installation-ids.json"
 const invalidJSONReason = "invalid JSON"
 
 type Snapshot struct {
-	Profiles        []ProfileSummary
-	InvalidProfiles []ProfileIssue
-	CurrentProfile  string
-	AuthActive      bool
+	Profiles          []ProfileSummary
+	InvalidProfiles   []ProfileIssue
+	CurrentProfileKey string
+	CurrentAuth       AuthSummary
+	AuthActive        bool
 }
 
 type ProfileSummary struct {
-	Name string
-	Note string
-	Plan Plan
+	Key         string
+	Label       string
+	CustomLabel string
+	Kind        AuthKind
+	Note        string
+	Plan        Plan
+
+	identity  authIdentity
+	email     string
+	baseLabel string
 }
+
+type AuthSummary struct {
+	Kind  AuthKind
+	Label string
+}
+
+type AuthKind string
+
+const (
+	AuthKindChatGPT AuthKind = "chatgpt"
+	AuthKindAPIKey  AuthKind = "apikey"
+)
 
 type Plan string
 
@@ -108,8 +131,9 @@ type profileScan struct {
 }
 
 type profileMetadata struct {
-	Note string `json:"note,omitempty"`
-	Plan Plan   `json:"plan,omitempty"`
+	Label string `json:"label,omitempty"`
+	Note  string `json:"note,omitempty"`
+	Plan  Plan   `json:"plan,omitempty"`
 }
 
 type authFileData struct {
@@ -117,7 +141,14 @@ type authFileData struct {
 	OpenAIAPIKey string `json:"OPENAI_API_KEY"`
 	Tokens       struct {
 		AccountID string `json:"account_id"`
+		IDToken   string `json:"id_token"`
 	} `json:"tokens"`
+}
+
+type authDescriptor struct {
+	Identity authIdentity
+	Kind     AuthKind
+	Email    string
 }
 
 type authIdentity struct {
@@ -144,9 +175,59 @@ func NewManager(codexDir string) Manager {
 	}
 }
 
+func (m Manager) ensurePrivateStorage() error {
+	dirs := []string{filepath.Dir(m.ProfileDir), m.ProfileDir}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("failed to create auth manager directory: %w", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("failed to secure auth manager directory %s: %w", dir, err)
+		}
+	}
+
+	managedFiles := []string{
+		m.AuthFile,
+		m.InstallationIDFile,
+		m.CurrentProfileFile,
+		m.MetadataFile,
+		m.LegacyNotesFile,
+		m.InstallationIDsFile,
+	}
+	entries, err := os.ReadDir(m.ProfileDir)
+	if err != nil {
+		return fmt.Errorf("failed to read profile directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() {
+			managedFiles = append(managedFiles, filepath.Join(m.ProfileDir, entry.Name()))
+		}
+	}
+	for _, path := range managedFiles {
+		if err := chmodRegularFile(path, 0o600); err != nil {
+			return fmt.Errorf("failed to secure managed auth file %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func chmodRegularFile(path string, perm os.FileMode) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	return os.Chmod(path, perm)
+}
+
 func (m Manager) Snapshot() (Snapshot, error) {
-	if err := os.MkdirAll(m.ProfileDir, 0o700); err != nil {
-		return Snapshot{}, fmt.Errorf("failed to create profile directory: %w", err)
+	if err := m.ensurePrivateStorage(); err != nil {
+		return Snapshot{}, err
 	}
 
 	scan, err := scanProfiles(m.ProfileDir)
@@ -171,11 +252,23 @@ func (m Manager) Snapshot() (Snapshot, error) {
 		return snapshot, nil
 	}
 
-	marker, err := resolveCurrentProfileMarker(m.AuthFile, m.CurrentProfileFile, m.ProfileDir, profileNames(scan.Profiles))
+	auth, err := readAuthDescriptor(m.AuthFile)
+	if err != nil {
+		if clearErr := clearInstallationID(m.InstallationIDFile); clearErr != nil {
+			return Snapshot{}, clearErr
+		}
+		return snapshot, nil
+	}
+	snapshot.CurrentAuth = AuthSummary{Kind: auth.Kind, Label: baseAuthLabel(auth, "")}
+
+	marker, err := resolveCurrentProfileMarker(m.AuthFile, m.CurrentProfileFile, m.ProfileDir, profileKeys(scan.Profiles))
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot.CurrentProfile = marker.Name
+	snapshot.CurrentProfileKey = marker.Name
+	if current := profileByKey(snapshot.Profiles, marker.Name); current != nil {
+		snapshot.CurrentAuth = AuthSummary{Kind: current.Kind, Label: current.Label}
+	}
 	if err := m.syncActiveInstallationID(marker); err != nil {
 		return Snapshot{}, err
 	}
@@ -230,44 +323,46 @@ func (m Manager) Activate(name string) error {
 	return nil
 }
 
-func (m Manager) SaveCurrent(name string) error {
-	if err := saveCurrentAuth(m.AuthFile, m.ProfileDir, name); err != nil {
-		return err
-	}
-	marker, err := markerForProfile(m.ProfileDir, name)
+func (m Manager) SaveCurrent(label string) error {
+	descriptor, err := readAuthDescriptor(m.AuthFile)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+		if !fileExists(m.AuthFile) {
+			return errors.New("no auth.json found - nothing to save")
+		}
+		return fmt.Errorf("current auth.json is invalid: %w", err)
 	}
-	if err := writeCurrentProfileMarker(m.CurrentProfileFile, marker); err != nil {
-		return fmt.Errorf("%w: %w", ErrStateChanged, err)
-	}
-	if err := m.setActiveInstallationIDForProfile(name); err != nil {
-		return fmt.Errorf("%w: %w", ErrStateChanged, err)
-	}
-	return nil
-}
 
-func (m Manager) Rename(oldName, newName, currentProfile string) error {
-	if err := renameProfile(m.ProfileDir, oldName, newName); err != nil {
+	label, err = validateLabelForAuth(descriptor.Kind, label)
+	if err != nil {
 		return err
 	}
-	if err := m.renameMetadata(oldName, newName); err != nil {
-		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	if err := m.ensurePrivateStorage(); err != nil {
+		return err
 	}
-	if err := m.renameInstallationID(oldName, newName); err != nil {
-		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	key := storageKeyForIdentity(descriptor)
+	if err := m.ensureIdentityNotSaved(descriptor.Identity); err != nil {
+		return err
 	}
-	if currentProfile != oldName {
-		return nil
+	if fileExists(filepath.Join(m.ProfileDir, key)) {
+		return fmt.Errorf("profile storage key %q already exists", key)
 	}
-	marker, err := markerForProfile(m.ProfileDir, newName)
+	if err := copyFile(m.AuthFile, filepath.Join(m.ProfileDir, key)); err != nil {
+		return fmt.Errorf("failed to save current auth: %w", err)
+	}
+	if descriptor.Kind == AuthKindAPIKey && label != "" {
+		if err := m.setProfileLabel(key, label); err != nil {
+			return fmt.Errorf("%w: %w", ErrStateChanged, err)
+		}
+	}
+
+	marker, err := markerForProfile(m.ProfileDir, key)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	if err := writeCurrentProfileMarker(m.CurrentProfileFile, marker); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
-	if err := m.setActiveInstallationIDForProfile(newName); err != nil {
+	if err := m.setActiveInstallationIDForProfile(key); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	return nil
@@ -355,18 +450,32 @@ func (m Manager) SetPlan(name string, plan Plan) error {
 	return writeProfileMetadata(m.MetadataFile, metadata)
 }
 
-func (m Manager) renameMetadata(oldName, newName string) error {
+func (m Manager) SetLabel(key, label string) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("missing profile key")
+	}
+	descriptor, err := readAuthDescriptor(filepath.Join(m.ProfileDir, key))
+	if err != nil {
+		return fmt.Errorf("failed to read profile: %w", err)
+	}
+	if descriptor.Kind != AuthKindAPIKey {
+		return errors.New("ChatGPT profile labels come from the account email")
+	}
+	label, err = validateProfileLabel(label)
+	if err != nil {
+		return err
+	}
+	return m.setProfileLabel(key, label)
+}
+
+func (m Manager) setProfileLabel(key, label string) error {
 	metadata, err := m.loadProfileMetadata()
 	if err != nil {
 		return err
 	}
-
-	entry, ok := metadata[oldName]
-	if !ok {
-		return nil
-	}
-	delete(metadata, oldName)
-	metadata[newName] = entry
+	entry := metadata[key]
+	entry.Label = label
+	metadata[key] = entry
 	return writeProfileMetadata(m.MetadataFile, metadata)
 }
 
@@ -420,20 +529,6 @@ func (m Manager) ensureProfileInstallationID(name string) (string, error) {
 	return id, nil
 }
 
-func (m Manager) renameInstallationID(oldName, newName string) error {
-	ids, err := readProfileInstallationIDs(m.InstallationIDsFile)
-	if err != nil {
-		return err
-	}
-	id, ok := ids[oldName]
-	if !ok {
-		return nil
-	}
-	delete(ids, oldName)
-	ids[newName] = id
-	return writeProfileInstallationIDs(m.InstallationIDsFile, ids)
-}
-
 func (m Manager) deleteInstallationID(name string) error {
 	ids, err := readProfileInstallationIDs(m.InstallationIDsFile)
 	if err != nil {
@@ -451,7 +546,7 @@ func listProfileNames(dirs ...string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return profileNames(scan.Profiles), nil
+	return profileKeys(scan.Profiles), nil
 }
 
 func scanProfiles(dirs ...string) (profileScan, error) {
@@ -477,7 +572,8 @@ func scanProfiles(dirs ...string) (profileScan, error) {
 			if !isProfileFilename(name) {
 				continue
 			}
-			if _, err := readAuthIdentity(filepath.Join(dir, name)); err != nil {
+			descriptor, err := readAuthDescriptor(filepath.Join(dir, name))
+			if err != nil {
 				key := filepath.Join(dir, name)
 				if _, ok := seenInvalid[key]; ok {
 					continue
@@ -493,12 +589,18 @@ func scanProfiles(dirs ...string) (profileScan, error) {
 				continue
 			}
 			seen[name] = struct{}{}
-			profiles = append(profiles, ProfileSummary{Name: name})
+			profiles = append(profiles, ProfileSummary{
+				Key:       name,
+				Kind:      descriptor.Kind,
+				identity:  descriptor.Identity,
+				email:     descriptor.Email,
+				baseLabel: baseAuthLabel(descriptor, ""),
+			})
 		}
 	}
 
 	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Name < profiles[j].Name
+		return profiles[i].Key < profiles[j].Key
 	})
 	sort.Slice(invalidProfiles, func(i, j int) bool {
 		return invalidProfiles[i].Name < invalidProfiles[j].Name
@@ -584,92 +686,143 @@ func syncProfileFromAuth(authFile, profileDir string, marker currentProfileMarke
 	return nil
 }
 
-func saveCurrentAuth(authFile, profileDir, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return errors.New("profile name cannot be empty")
-	}
-	if !isValidProfileName(name) {
-		return errors.New("invalid profile name; use letters, numbers, dot, underscore, dash, @")
-	}
-	if !fileExists(authFile) {
-		return errors.New("no auth.json found - nothing to save")
-	}
-	if _, err := readAuthIdentity(authFile); err != nil {
-		return fmt.Errorf("current auth.json is invalid: %w", err)
-	}
-
-	dst := filepath.Join(profileDir, name)
-	if fileExists(dst) {
-		return fmt.Errorf("profile %q already exists", name)
-	}
-
-	profiles, err := listProfileNames(profileDir)
-	if err != nil {
-		return err
-	}
-	for _, p := range profiles {
-		same, err := filesEqual(authFile, filepath.Join(profileDir, p))
-		if err != nil {
-			return err
-		}
-		if same {
-			return fmt.Errorf("same auth already exists as profile %q", p)
-		}
-	}
-
-	if err := copyFile(authFile, dst); err != nil {
-		return fmt.Errorf("failed to save profile %q: %w", name, err)
-	}
-	return nil
-}
-
-func renameProfile(profileDir, oldName, newName string) error {
-	newName = strings.TrimSpace(newName)
-
-	if oldName == "" {
-		return errors.New("missing source profile")
-	}
-	if newName == "" {
-		return errors.New("new profile name cannot be empty")
-	}
-	if !isValidProfileName(newName) {
-		return errors.New("invalid profile name; use letters, numbers, dot, underscore, dash, @")
-	}
-	if oldName == newName {
-		return nil
-	}
-
-	oldPath := filepath.Join(profileDir, oldName)
-	newPath := filepath.Join(profileDir, newName)
-
-	if !fileExists(oldPath) {
-		return fmt.Errorf("profile %q not found", oldName)
-	}
-	if fileExists(newPath) {
-		return fmt.Errorf("profile %q already exists", newName)
-	}
-
-	if err := os.Rename(oldPath, newPath); err != nil {
-		return fmt.Errorf("failed to rename profile: %w", err)
-	}
-	return nil
-}
-
-func profileNames(profiles []ProfileSummary) []string {
+func profileKeys(profiles []ProfileSummary) []string {
 	names := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
-		names = append(names, profile.Name)
+		names = append(names, profile.Key)
 	}
 	return names
 }
 
 func applyProfileMetadata(profiles []ProfileSummary, metadata map[string]profileMetadata) {
 	for i := range profiles {
-		entry := metadata[profiles[i].Name]
+		entry := metadata[profiles[i].Key]
 		profiles[i].Note = entry.Note
 		profiles[i].Plan = normalizedPlan(entry.Plan)
+		if profiles[i].Kind == AuthKindAPIKey {
+			profiles[i].CustomLabel = entry.Label
+		}
+		profiles[i].baseLabel = profileBaseLabel(profiles[i], entry.Label)
 	}
+	resolveProfileLabels(profiles)
+}
+
+func profileByKey(profiles []ProfileSummary, key string) *ProfileSummary {
+	for i := range profiles {
+		if profiles[i].Key == key {
+			return &profiles[i]
+		}
+	}
+	return nil
+}
+
+func profileBaseLabel(profile ProfileSummary, customLabel string) string {
+	descriptor := authDescriptor{Identity: profile.identity, Kind: profile.Kind, Email: profile.email}
+	return baseAuthLabel(descriptor, customLabel)
+}
+
+func baseAuthLabel(descriptor authDescriptor, customLabel string) string {
+	switch descriptor.Kind {
+	case AuthKindChatGPT:
+		if email := strings.TrimSpace(descriptor.Email); email != "" {
+			return email
+		}
+		return "ChatGPT account · " + accountIDSuffix(descriptor.Identity.AccountID)
+	case AuthKindAPIKey:
+		if label := strings.TrimSpace(customLabel); label != "" {
+			return label
+		}
+		return "API key · " + shortHead(descriptor.Identity.APIKeyHash, 8)
+	default:
+		return "Unknown auth"
+	}
+}
+
+func resolveProfileLabels(profiles []ProfileSummary) {
+	baseGroups := make(map[string][]int)
+	for i := range profiles {
+		profiles[i].Label = profiles[i].baseLabel
+		key := strings.ToLower(profiles[i].baseLabel)
+		baseGroups[key] = append(baseGroups[key], i)
+	}
+	for _, indexes := range baseGroups {
+		if len(indexes) < 2 {
+			continue
+		}
+		for _, i := range indexes {
+			fingerprint := shortHead(hashString(canonicalIdentity(profiles[i].identity)), 8)
+			profiles[i].Label += " · " + fingerprint
+		}
+	}
+
+	roots := make([]string, len(profiles))
+	suffixLengths := make([]int, len(profiles))
+	for i := range profiles {
+		roots[i] = profiles[i].Label
+	}
+	for {
+		collisions := duplicateLabelGroups(profiles)
+		if len(collisions) == 0 {
+			return
+		}
+		for _, indexes := range collisions {
+			for _, i := range indexes {
+				if suffixLengths[i] == 0 {
+					suffixLengths[i] = 8
+				} else if suffixLengths[i] < sha256.Size*2 {
+					suffixLengths[i] += 4
+				} else {
+					profiles[i].Label = roots[i] + " · " + profileDiscriminator(profiles[i]) + " · " + base64.RawURLEncoding.EncodeToString([]byte(profiles[i].Key))
+					continue
+				}
+				fingerprint := profileDiscriminator(profiles[i])
+				profiles[i].Label = roots[i] + " · " + shortHead(fingerprint, suffixLengths[i])
+			}
+		}
+	}
+}
+
+func profileDiscriminator(profile ProfileSummary) string {
+	identity := canonicalIdentity(profile.identity)
+	return hashString(identity + "\x00" + profile.Key)
+}
+
+func duplicateLabelGroups(profiles []ProfileSummary) [][]int {
+	groups := make(map[string][]int)
+	for i := range profiles {
+		key := strings.ToLower(profiles[i].Label)
+		groups[key] = append(groups[key], i)
+	}
+	duplicates := make([][]int, 0)
+	for _, indexes := range groups {
+		if len(indexes) > 1 {
+			duplicates = append(duplicates, indexes)
+		}
+	}
+	return duplicates
+}
+
+func shortHead(value string, length int) string {
+	if len(value) <= length {
+		return value
+	}
+	return value[:length]
+}
+
+func shortTail(value string, length int) string {
+	if len(value) <= length {
+		return value
+	}
+	return value[len(value)-length:]
+}
+
+func accountIDSuffix(accountID string) string {
+	for _, r := range accountID {
+		if unicode.IsControl(r) {
+			return shortHead(hashString(accountID), 8)
+		}
+	}
+	return shortTail(accountID, 8)
 }
 
 func (m Manager) loadProfileMetadata() (map[string]profileMetadata, error) {
@@ -780,7 +933,11 @@ func readProfileMetadata(path string) (map[string]profileMetadata, error) {
 				return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
 			}
 		}
-		cleaned[name] = profileMetadata{Note: note, Plan: normalizedPlan(entry.Plan)}
+		label, err := validateProfileLabel(entry.Label)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
+		}
+		cleaned[name] = profileMetadata{Label: label, Note: note, Plan: normalizedPlan(entry.Plan)}
 	}
 	return cleaned, nil
 }
@@ -799,13 +956,17 @@ func writeProfileMetadata(path string, metadata map[string]profileMetadata) erro
 		if err := validatePlan(plan); err != nil {
 			return err
 		}
-		if note == "" && plan == PlanFree {
+		label, err := validateProfileLabel(entry.Label)
+		if err != nil {
+			return err
+		}
+		if label == "" && note == "" && plan == PlanFree {
 			continue
 		}
 		if plan == PlanFree {
 			plan = ""
 		}
-		filtered[name] = profileMetadata{Note: note, Plan: plan}
+		filtered[name] = profileMetadata{Label: label, Note: note, Plan: plan}
 	}
 
 	if len(filtered) == 0 {
@@ -973,6 +1134,30 @@ func validateProfileNote(note string) (string, error) {
 	return note, nil
 }
 
+func validateProfileLabel(label string) (string, error) {
+	for _, r := range label {
+		if unicode.IsControl(r) {
+			return "", errors.New("profile label must be a single line without control characters")
+		}
+	}
+	label = strings.TrimSpace(label)
+	if utf8.RuneCountInString(label) > 64 {
+		return "", errors.New("profile label cannot exceed 64 characters")
+	}
+	return label, nil
+}
+
+func validateLabelForAuth(kind AuthKind, label string) (string, error) {
+	label, err := validateProfileLabel(label)
+	if err != nil {
+		return "", err
+	}
+	if kind == AuthKindChatGPT && label != "" {
+		return "", errors.New("ChatGPT profile labels come from the account email")
+	}
+	return label, nil
+}
+
 func validatePlan(plan Plan) error {
 	switch plan {
 	case PlanFree, PlanPlus, PlanPro:
@@ -1109,14 +1294,22 @@ func markerForProfile(profileDir, name string) (currentProfileMarker, error) {
 }
 
 func readAuthIdentity(path string) (authIdentity, error) {
+	descriptor, err := readAuthDescriptor(path)
+	if err != nil {
+		return authIdentity{}, err
+	}
+	return descriptor.Identity, nil
+}
+
+func readAuthDescriptor(path string) (authDescriptor, error) {
 	data, err := os.ReadFile(path) // #nosec G304 G703 -- auth/profile paths are derived from the configured Codex directory.
 	if err != nil {
-		return authIdentity{}, fmt.Errorf("failed to read auth file %s: %w", path, err)
+		return authDescriptor{}, fmt.Errorf("failed to read auth file %s: %w", path, err)
 	}
 
 	var auth authFileData
 	if err := json.Unmarshal(data, &auth); err != nil {
-		return authIdentity{}, fmt.Errorf("failed to parse auth file %s: %w", path, err)
+		return authDescriptor{}, fmt.Errorf("failed to parse auth file %s: %w", path, err)
 	}
 
 	identity := authIdentity{
@@ -1128,11 +1321,79 @@ func readAuthIdentity(path string) (authIdentity, error) {
 		identity.APIKeyHash = hex.EncodeToString(sum[:])
 	}
 
-	if identity.AuthMode == "" && identity.AccountID == "" && identity.APIKeyHash == "" {
-		return authIdentity{}, fmt.Errorf("auth file %s: %w", path, errNoUsableIdentity)
+	if identity.AccountID == "" && identity.APIKeyHash == "" {
+		return authDescriptor{}, fmt.Errorf("auth file %s: %w", path, errNoUsableIdentity)
 	}
 
-	return identity, nil
+	if identity.AccountID != "" {
+		return authDescriptor{
+			Identity: identity,
+			Kind:     AuthKindChatGPT,
+			Email:    emailFromIDToken(auth.Tokens.IDToken),
+		}, nil
+	}
+	return authDescriptor{Identity: identity, Kind: AuthKindAPIKey}, nil
+}
+
+func emailFromIDToken(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	email := strings.TrimSpace(claims.Email)
+	if email == "" || utf8.RuneCountInString(email) > 254 {
+		return ""
+	}
+	for _, r := range email {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return email
+}
+
+func storageKeyForIdentity(descriptor authDescriptor) string {
+	return string(descriptor.Kind) + "-" + hashString(canonicalIdentity(descriptor.Identity))
+}
+
+func canonicalIdentity(identity authIdentity) string {
+	if identity.AccountID != "" {
+		return "chatgpt\x00" + identity.AccountID
+	}
+	return "apikey\x00" + identity.APIKeyHash
+}
+
+func hashString(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func (m Manager) ensureIdentityNotSaved(identity authIdentity) error {
+	profiles, err := scanProfiles(m.ProfileDir)
+	if err != nil {
+		return err
+	}
+	metadata, err := m.loadProfileMetadata()
+	if err != nil {
+		return err
+	}
+	applyProfileMetadata(profiles.Profiles, metadata)
+	for _, profile := range profiles.Profiles {
+		if profile.identity.sameLogicalIdentity(identity) {
+			return fmt.Errorf("same auth already exists as profile %q", profile.Label)
+		}
+	}
+	return nil
 }
 
 func profileIssueReason(err error) string {
@@ -1154,20 +1415,18 @@ func profileIssueReason(err error) string {
 }
 
 func (a authIdentity) matches(other authIdentity) bool {
-	if a.AuthMode != other.AuthMode {
-		return false
-	}
+	return a.sameLogicalIdentity(other)
+}
+
+func (a authIdentity) sameLogicalIdentity(other authIdentity) bool {
 	if a.AccountID != "" || other.AccountID != "" {
 		return a.AccountID != "" && a.AccountID == other.AccountID
 	}
-	if a.APIKeyHash != "" || other.APIKeyHash != "" {
-		return a.APIKeyHash != "" && a.APIKeyHash == other.APIKeyHash
-	}
-	return false
+	return a.APIKeyHash != "" && a.APIKeyHash == other.APIKeyHash
 }
 
 func (a authIdentity) hasUsableIdentity() bool {
-	return a.AuthMode != "" || a.AccountID != "" || a.APIKeyHash != ""
+	return a.AccountID != "" || a.APIKeyHash != ""
 }
 
 func logoutAuth(authFile string) error {
