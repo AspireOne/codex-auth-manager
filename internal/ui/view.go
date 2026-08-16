@@ -102,7 +102,7 @@ func (m appModel) renderList() string {
 func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
 	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Used", "Resets at", "Auth", "Cache"}
+	headings := []string{"Rem.", "Resets at", "Auth", "Cache"}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
 		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
@@ -186,7 +186,7 @@ func (m appModel) profileStatusValues(key string) []string {
 	auth := "?"
 	if view.status != nil {
 		if view.status.UsedPercent != nil && view.status.ResetsAt != nil {
-			usage = fmt.Sprintf("%d%%", *view.status.UsedPercent)
+			usage = fmt.Sprintf("%d%%", remainingPercent(*view.status.UsedPercent))
 			reset = view.status.ResetsAt.In(time.Local).Format("02.01. 15:04")
 		}
 		switch view.status.AuthStatus {
@@ -210,6 +210,10 @@ func (m appModel) profileStatusValues(key string) []string {
 		}
 	}
 	return []string{usage, reset, auth, cache}
+}
+
+func remainingPercent(used int) int {
+	return max(0, min(100, 100-used))
 }
 
 func (m appModel) renderProfileStatusColumns(key string) []string {
@@ -238,7 +242,7 @@ func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {
 }
 
 func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Used", "Resets at", "Auth", "Cache"}
+	headings := []string{"Rem.", "Resets at", "Auth", "Cache"}
 	widths := make([]int, len(headings))
 	for i, heading := range headings {
 		widths[i] = lipgloss.Width(heading)

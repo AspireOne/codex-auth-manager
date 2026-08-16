@@ -1089,6 +1089,9 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 	if strings.Count(firstLine, "│") != 4 || strings.Count(secondLine, "│") != 4 {
 		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
 	}
+	if !strings.Contains(firstLine, "99%") || !strings.Contains(secondLine, "0%") {
+		t.Fatalf("remaining percentages are incorrect:\n%s\n%s", firstLine, secondLine)
+	}
 	if firstAuth, secondAuth := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗"); firstAuth != secondAuth {
 		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", firstAuth, secondAuth, firstLine, secondLine)
 	}
@@ -1281,7 +1284,7 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 		},
 	}
 	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"Profile", "Plan", "Used", "Resets at", "Auth", "Cache", "Note", "57%", "16.08. 15:30", "✓", "Cached"} {
+	for _, want := range []string{"Profile", "Plan", "Rem.", "Resets at", "Auth", "Cache", "Note", "43%", "16.08. 15:30", "✓", "Cached"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
 		}
@@ -1307,11 +1310,11 @@ func TestRenderEveryChatGPTStatusState(t *testing.T) {
 		view profileStatusView
 		want []string
 	}{
-		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"57%", "✓", "Cached"}},
-		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"57%", "✓", "Loading"}},
+		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"43%", "✓", "Cached"}},
+		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"43%", "✓", "Loading"}},
 		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-", "?", "Loading"}},
 		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-", "✗", "Cached"}},
-		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"57%", "✓", "Cached · failed"}},
+		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"43%", "✓", "Cached · failed"}},
 		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-", "?", "Unavailable · failed"}},
 	}
 	for _, test := range tests {
