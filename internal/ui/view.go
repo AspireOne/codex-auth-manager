@@ -81,8 +81,9 @@ func (m appModel) renderList() string {
 		return emptyStyle.Render("No saved profiles.")
 	}
 
-	lines := make([]string, 0, len(m.profiles))
 	profileColumnWidth := m.profileColumnWidth()
+	lines := make([]string, 0, len(m.profiles)+1)
+	lines = append(lines, m.renderProfileTableHeader(profileColumnWidth))
 	for i, p := range m.profiles {
 		prefix := "  "
 		style := itemStyle
@@ -96,6 +97,17 @@ func (m appModel) renderList() string {
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
+}
+
+func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
+	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
+	base := profile + "    " + tableHeaderStyle.Render("Plan")
+	headings := []string{"Used", "Resets at", "Auth", "Cache"}
+	widths := m.profileStatusColumnWidths()
+	for i, heading := range headings {
+		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
+	}
+	return renderProfileColumns(append([]string{base}, append(headings, tableHeaderStyle.Render("Note"))...)...)
 }
 
 func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
@@ -169,19 +181,19 @@ func (m appModel) profileStatusValues(key string) []string {
 	if !ok {
 		view = profileStatusView{phase: statusLoading}
 	}
-	usage := "-% used"
-	reset := "resets -"
-	auth := "Unknown"
+	usage := "-"
+	reset := "-"
+	auth := "?"
 	if view.status != nil {
 		if view.status.UsedPercent != nil && view.status.ResetsAt != nil {
-			usage = fmt.Sprintf("%d%% used", *view.status.UsedPercent)
-			reset = fmt.Sprintf("resets %s", view.status.ResetsAt.In(time.Local).Format("02.01. 15:04"))
+			usage = fmt.Sprintf("%d%%", *view.status.UsedPercent)
+			reset = view.status.ResetsAt.In(time.Local).Format("02.01. 15:04")
 		}
 		switch view.status.AuthStatus {
 		case profilemgr.ProfileAuthAuthenticated:
-			auth = "Authenticated"
+			auth = "✓"
 		case profilemgr.ProfileAuthSignInRequired:
-			auth = "Sign-in required"
+			auth = "✗"
 		}
 	}
 	cache := "Loading"
@@ -206,11 +218,31 @@ func (m appModel) renderProfileStatusColumns(key string) []string {
 	for i, value := range values {
 		values[i] = value + strings.Repeat(" ", widths[i]-lipgloss.Width(value))
 	}
+	values[2] = m.profileAuthIndicatorStyle(key).Render(values[2])
 	return values
 }
 
+func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {
+	view, ok := m.profileStatuses[key]
+	if !ok || view.status == nil {
+		return footerStyle
+	}
+	switch view.status.AuthStatus {
+	case profilemgr.ProfileAuthAuthenticated:
+		return currentTag
+	case profilemgr.ProfileAuthSignInRequired:
+		return errorStyle
+	default:
+		return footerStyle
+	}
+}
+
 func (m appModel) profileStatusColumnWidths() []int {
-	widths := make([]int, 4)
+	headings := []string{"Used", "Resets at", "Auth", "Cache"}
+	widths := make([]int, len(headings))
+	for i, heading := range headings {
+		widths[i] = lipgloss.Width(heading)
+	}
 	for _, p := range m.profiles {
 		if p.Kind != profilemgr.AuthKindChatGPT {
 			continue

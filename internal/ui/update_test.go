@@ -1071,7 +1071,7 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 	if strings.Count(firstLine, "│") != 4 || strings.Count(secondLine, "│") != 4 {
 		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
 	}
-	if firstAuth, secondAuth := strings.Index(firstLine, "Authenticated"), strings.Index(secondLine, "Sign-in required"); firstAuth != secondAuth {
+	if firstAuth, secondAuth := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗"); firstAuth != secondAuth {
 		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", firstAuth, secondAuth, firstLine, secondLine)
 	}
 }
@@ -1262,7 +1262,7 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 		},
 	}
 	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"57% used", "resets 16.08. 15:30", "Authenticated", "Cached"} {
+	for _, want := range []string{"Profile", "Plan", "Used", "Resets at", "Auth", "Cache", "Note", "57%", "16.08. 15:30", "✓", "Cached"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
 		}
@@ -1273,7 +1273,7 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 			apiLine = line
 		}
 	}
-	if strings.Contains(apiLine, "% used") || strings.Contains(apiLine, "Cached") {
+	if strings.Contains(apiLine, "%") || strings.Contains(apiLine, "Cached") {
 		t.Fatalf("API-key row contains ChatGPT status: %q", apiLine)
 	}
 }
@@ -1288,12 +1288,12 @@ func TestRenderEveryChatGPTStatusState(t *testing.T) {
 		view profileStatusView
 		want []string
 	}{
-		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"57% used", "Authenticated", "Cached"}},
-		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"57% used", "Authenticated", "Loading"}},
-		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-% used", "resets -", "Unknown", "Loading"}},
-		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-% used", "Sign-in required", "Cached"}},
-		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"57% used", "Authenticated", "Cached · failed"}},
-		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-% used", "Unknown", "Unavailable · failed"}},
+		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"57%", "✓", "Cached"}},
+		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"57%", "✓", "Loading"}},
+		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-", "?", "Loading"}},
+		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-", "✗", "Cached"}},
+		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"57%", "✓", "Cached · failed"}},
+		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-", "?", "Unavailable · failed"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

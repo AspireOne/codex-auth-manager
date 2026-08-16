@@ -47,6 +47,10 @@ var (
 	profileColumnSeparator = lipgloss.NewStyle().
 				Foreground(mutedColor)
 
+	tableHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(mutedColor)
+
 	mutedStatusStyle = lipgloss.NewStyle().
 				Foreground(mutedColor).
 				Faint(true)
