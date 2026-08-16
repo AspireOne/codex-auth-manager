@@ -44,6 +44,9 @@ var (
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 
+	profileColumnSeparator = lipgloss.NewStyle().
+				Foreground(mutedColor)
+
 	mutedStatusStyle = lipgloss.NewStyle().
 				Foreground(mutedColor).
 				Faint(true)

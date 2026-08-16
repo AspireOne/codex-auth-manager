@@ -1044,8 +1044,35 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 	if len(parts) < 2 {
 		t.Fatalf("rendered line did not wrap:\n%s", line)
 	}
-	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note should") {
+	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note") {
 		t.Fatalf("rendered first line missing inline note:\n%s", line)
+	}
+}
+
+func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
+	firstPercent, secondPercent := 1, 100
+	firstReset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	secondReset := time.Date(2026, 9, 2, 1, 2, 0, 0, time.Local)
+	m := appModel{
+		width: 200,
+		profiles: []profilemgr.ProfileSummary{
+			{Key: "short", Label: "a@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
+			{Key: "long", Label: "longer@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus},
+		},
+		profileStatuses: map[string]profileStatusView{
+			"short": {status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &firstPercent, ResetsAt: &firstReset}, phase: statusCached},
+			"long":  {status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthSignInRequired, UsedPercent: &secondPercent, ResetsAt: &secondReset}, phase: statusCached},
+		},
+	}
+
+	columnWidth := m.profileColumnWidth()
+	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
+	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
+	if strings.Count(firstLine, "│") != 4 || strings.Count(secondLine, "│") != 4 {
+		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
+	}
+	if firstAuth, secondAuth := strings.Index(firstLine, "Authenticated"), strings.Index(secondLine, "Sign-in required"); firstAuth != secondAuth {
+		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", firstAuth, secondAuth, firstLine, secondLine)
 	}
 }
 

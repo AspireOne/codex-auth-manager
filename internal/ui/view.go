@@ -104,12 +104,16 @@ func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note st
 }
 
 func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix string, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int) string {
-	base := m.renderProfileCell(style, prefix, profile.Label, isCurrent, profileColumnWidth) + "  " + renderPlan(profile.Plan)
+	marker := " "
+	if isCurrent {
+		marker = currentTag.Render("●")
+	}
+	base := m.renderProfileCell(style, prefix, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlan(profile.Plan)
 	trailing := strings.TrimSpace(profile.Note)
 	if profile.Kind == profilemgr.AuthKindChatGPT {
-		status := m.renderProfileStatus(profile.Key)
+		status := renderProfileColumns(m.renderProfileStatusColumns(profile.Key)...)
 		if trailing != "" {
-			trailing = status + "  " + trailing
+			trailing = status + profileColumnSeparator.Render(" │ ") + trailing
 		} else {
 			trailing = status
 		}
@@ -118,7 +122,7 @@ func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix strin
 		return base
 	}
 
-	separator := "  "
+	separator := profileColumnSeparator.Render(" │ ")
 	noteStyle := footerStyle
 	if profile.Kind == profilemgr.AuthKindChatGPT {
 		noteStyle = lipgloss.NewStyle()
@@ -129,6 +133,9 @@ func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix strin
 	continuationIndent := "    "
 	availableWidth := m.listContentWidth()
 	if availableWidth <= 0 {
+		return base + noteStyle.Render(separator+trailing)
+	}
+	if lipgloss.Width(base)+lipgloss.Width(separator)+lipgloss.Width(trailing) <= availableWidth {
 		return base + noteStyle.Render(separator+trailing)
 	}
 
@@ -154,15 +161,21 @@ func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix strin
 }
 
 func (m appModel) renderProfileStatus(key string) string {
+	return renderProfileColumns(m.profileStatusValues(key)...)
+}
+
+func (m appModel) profileStatusValues(key string) []string {
 	view, ok := m.profileStatuses[key]
 	if !ok {
 		view = profileStatusView{phase: statusLoading}
 	}
-	usage := "-% used (resets -)"
+	usage := "-% used"
+	reset := "resets -"
 	auth := "Unknown"
 	if view.status != nil {
 		if view.status.UsedPercent != nil && view.status.ResetsAt != nil {
-			usage = fmt.Sprintf("%d%% used (resets %s)", *view.status.UsedPercent, view.status.ResetsAt.In(time.Local).Format("02.01. 15:04"))
+			usage = fmt.Sprintf("%d%% used", *view.status.UsedPercent)
+			reset = fmt.Sprintf("resets %s", view.status.ResetsAt.In(time.Local).Format("02.01. 15:04"))
 		}
 		switch view.status.AuthStatus {
 		case profilemgr.ProfileAuthAuthenticated:
@@ -184,7 +197,36 @@ func (m appModel) renderProfileStatus(key string) string {
 			cache = "Unavailable · failed"
 		}
 	}
-	return usage + "  " + auth + "  " + cache
+	return []string{usage, reset, auth, cache}
+}
+
+func (m appModel) renderProfileStatusColumns(key string) []string {
+	values := m.profileStatusValues(key)
+	widths := m.profileStatusColumnWidths()
+	for i, value := range values {
+		values[i] = value + strings.Repeat(" ", widths[i]-lipgloss.Width(value))
+	}
+	return values
+}
+
+func (m appModel) profileStatusColumnWidths() []int {
+	widths := make([]int, 4)
+	for _, p := range m.profiles {
+		if p.Kind != profilemgr.AuthKindChatGPT {
+			continue
+		}
+		for i, value := range m.profileStatusValues(p.Key) {
+			widths[i] = max(widths[i], lipgloss.Width(value))
+		}
+	}
+	for i, value := range m.profileStatusValues("") {
+		widths[i] = max(widths[i], lipgloss.Width(value))
+	}
+	return widths
+}
+
+func renderProfileColumns(columns ...string) string {
+	return strings.Join(columns, profileColumnSeparator.Render(" │ "))
 }
 
 func renderPlan(plan profilemgr.Plan) string {
@@ -203,25 +245,16 @@ func renderPlan(plan profilemgr.Plan) string {
 	return style.Render(label) + strings.Repeat(" ", planColumnWidth-lipgloss.Width(label))
 }
 
-func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, isCurrent bool, profileColumnWidth int) string {
-	const currentMarker = " ●"
-	const markerWidth = 2
-
-	paddingWidth := profileColumnWidth - lipgloss.Width(prefix+label) - markerWidth
+func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, profileColumnWidth int) string {
+	paddingWidth := profileColumnWidth - lipgloss.Width(prefix+label)
 	if paddingWidth < 0 {
 		paddingWidth = 0
 	}
 
-	cell := style.Render(prefix+label) + strings.Repeat(" ", paddingWidth)
-	if isCurrent {
-		return cell + currentTag.Render(currentMarker)
-	}
-	return cell + strings.Repeat(" ", markerWidth)
+	return style.Render(prefix+label) + strings.Repeat(" ", paddingWidth)
 }
 
 func (m appModel) profileColumnWidth() int {
-	const markerWidth = 2
-
 	width := 0
 	for i, p := range m.profiles {
 		prefix := "  "
@@ -229,7 +262,7 @@ func (m appModel) profileColumnWidth() int {
 			prefix = "» "
 		}
 
-		lineWidth := lipgloss.Width(prefix+p.Label) + markerWidth
+		lineWidth := lipgloss.Width(prefix + p.Label)
 		if lineWidth > width {
 			width = lineWidth
 		}
