@@ -83,6 +83,9 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m.enterEditNoteMode(), nil
 
+	case "p":
+		return m.cycleSelectedPlan(), nil
+
 	case "s":
 		if !m.authActive {
 			m.setError("No active auth.json to save.")
@@ -281,6 +284,29 @@ func (m appModel) enterEditNoteMode() appModel {
 	}
 	selected := m.selectedProfile()
 	return m.enterInput(actionEditNote, fmt.Sprintf("Edit note for %q:", selected.Name), selected.Note)
+}
+
+func (m appModel) cycleSelectedPlan() appModel {
+	if len(m.profiles) == 0 {
+		m.setError("No profiles to update.")
+		return m
+	}
+
+	selected := m.selectedProfile()
+	nextPlan := selected.Plan.Next()
+	if err := m.profileManager.SetPlan(selected.Name, nextPlan); err != nil {
+		return m.handleActionError(err)
+	}
+	if err := m.reload(); err != nil {
+		m.setError(err.Error())
+		return m
+	}
+	m.cursor = indexOfProfile(m.profiles, selected.Name)
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.setStatus(fmt.Sprintf("Set plan for %q to %s.", selected.Name, nextPlan.Label()))
+	return m
 }
 
 func (m *appModel) activateProfile(name string) appModel {

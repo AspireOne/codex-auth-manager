@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+
+	profilemgr "codex-manage/internal/profiles"
 )
 
 func (m appModel) View() tea.View {
@@ -85,14 +87,14 @@ func (m appModel) renderList() string {
 			style = selectedItemStyle
 		}
 
-		lines = append(lines, m.renderProfileLine(style, prefix, p.Name, p.Note, p.Name == m.currentProfile, profileColumnWidth))
+		lines = append(lines, m.renderProfileLine(style, prefix, p.Name, p.Note, p.Plan, p.Name == m.currentProfile, profileColumnWidth))
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
 }
 
-func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, isCurrent bool, profileColumnWidth int) string {
-	base := m.renderProfileCell(style, prefix, label, isCurrent, profileColumnWidth)
+func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
+	base := m.renderProfileCell(style, prefix, label, isCurrent, profileColumnWidth) + "  " + renderPlan(plan)
 	note = strings.TrimSpace(note)
 	if note == "" {
 		return base
@@ -125,6 +127,22 @@ func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note st
 		line += "\n" + noteStyle.Render(continuationIndent+part)
 	}
 	return line
+}
+
+func renderPlan(plan profilemgr.Plan) string {
+	const planColumnWidth = 4
+
+	label := plan.Label()
+	style := freePlanStyle
+	switch plan {
+	case profilemgr.PlanPro:
+		style = proPlanStyle
+	case profilemgr.PlanPlus:
+		style = plusPlanStyle
+	case profilemgr.PlanFree:
+		style = freePlanStyle
+	}
+	return style.Render(label) + strings.Repeat(" ", planColumnWidth-lipgloss.Width(label))
 }
 
 func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, isCurrent bool, profileColumnWidth int) string {
@@ -207,9 +225,12 @@ func (m appModel) renderFooter() string {
 	case modeConfirm:
 		return footerStyle.Render(m.confirmPrompt)
 	case modeNormal:
-		profileCommands := []string{
+		navigationCommands := []string{
 			formatKeyHint("↑/↓", "move"),
 			formatKeyHint("enter", "activate"),
+			formatKeyHint("p", "cycle plan"),
+		}
+		profileCommands := []string{
 			formatKeyHint("n", "edit note"),
 			formatKeyHint("r", "rename"),
 			formatKeyHint("d", "delete"),
@@ -223,7 +244,8 @@ func (m appModel) renderFooter() string {
 
 		return lipgloss.JoinVertical(
 			lipgloss.Left,
-			footerStyle.Render("UI: "+strings.Join(profileCommands, " • ")),
+			footerStyle.Render("UI: "+strings.Join(navigationCommands, " • ")),
+			footerStyle.Render("Manage: "+strings.Join(profileCommands, " • ")),
 			footerStyle.Render("Global: "+strings.Join(globalCommands, " • ")),
 		)
 	default:

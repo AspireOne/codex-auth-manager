@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -109,6 +110,9 @@ func (m *appModel) reload() error {
 		return err
 	}
 	m.profiles = snapshot.Profiles
+	sort.SliceStable(m.profiles, func(i, j int) bool {
+		return m.profiles[i].Plan.Rank() < m.profiles[j].Plan.Rank()
+	})
 	m.invalidProfiles = snapshot.InvalidProfiles
 
 	if len(m.profiles) == 0 {

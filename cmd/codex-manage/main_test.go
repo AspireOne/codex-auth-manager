@@ -15,6 +15,10 @@ func TestRunListPrintsAvailableProfiles(t *testing.T) {
 	home := t.TempDir()
 	writeCLIAuthFile(t, filepath.Join(home, ".codex", "auth_manager", "profiles", "work"), "acct-work")
 	writeCLIAuthFile(t, filepath.Join(home, ".codex", "auth_manager", "profiles", "personal"), "acct-personal")
+	metadataPath := filepath.Join(home, ".codex", "auth_manager", ".profile-metadata.json")
+	if err := os.WriteFile(metadataPath, []byte(`{"work":{"plan":"pro"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile metadata: %v", err)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

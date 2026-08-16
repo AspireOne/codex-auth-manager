@@ -378,14 +378,15 @@ func TestManagerSetNotePersistsAndSnapshotReturnsIt(t *testing.T) {
 	if got := snapshot.Profiles[0].Note; got != "Plus trial ends soon" {
 		t.Fatalf("snapshot note = %q, want %q", got, "Plus trial ends soon")
 	}
+	if got := snapshot.Profiles[0].Plan; got != PlanFree {
+		t.Fatalf("snapshot plan = %q, want %q", got, PlanFree)
+	}
 }
 
-func TestManagerSnapshotIgnoresMalformedNotesFile(t *testing.T) {
+func TestManagerSnapshotMigratesLegacyNotes(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
-	if err := os.WriteFile(paths.notesFile, []byte("{not json}\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile malformed notes: %v", err)
-	}
+	writeProfileNotesFile(t, paths.legacyNotesFile, map[string]string{"work": "Plus trial ends soon"})
 
 	snapshot, err := m.Snapshot()
 	if err != nil {
@@ -393,9 +394,36 @@ func TestManagerSnapshotIgnoresMalformedNotesFile(t *testing.T) {
 	}
 
 	assertProfiles(t, snapshot.Profiles, []string{"work"})
-	if got := snapshot.Profiles[0].Note; got != "" {
-		t.Fatalf("snapshot note = %q, want empty", got)
+	if got := snapshot.Profiles[0].Note; got != "Plus trial ends soon" {
+		t.Fatalf("snapshot note = %q, want migrated note", got)
 	}
+	if got := snapshot.Profiles[0].Plan; got != PlanFree {
+		t.Fatalf("snapshot plan = %q, want %q", got, PlanFree)
+	}
+	assertFileMissing(t, paths.legacyNotesFile)
+	assertFileExists(t, paths.metadataFile)
+	info, err := os.Stat(paths.metadataFile)
+	if err != nil {
+		t.Fatalf("Stat metadata: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("metadata mode = %o, want 600", got)
+	}
+}
+
+func TestManagerSnapshotPreservesMalformedLegacyNotes(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+	if err := os.WriteFile(paths.legacyNotesFile, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed notes: %v", err)
+	}
+
+	_, err := m.Snapshot()
+	if err == nil || !strings.Contains(err.Error(), "failed to migrate profile notes") {
+		t.Fatalf("Snapshot() error = %v, want migration error", err)
+	}
+	assertFileExists(t, paths.legacyNotesFile)
+	assertFileMissing(t, paths.metadataFile)
 }
 
 func TestManagerSetNoteRejectsLongValues(t *testing.T) {
@@ -411,10 +439,79 @@ func TestManagerSetNoteRejectsLongValues(t *testing.T) {
 	}
 }
 
-func TestManagerRenameMovesNote(t *testing.T) {
+func TestManagerSetPlanPersistsAndPreservesNote(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+	if err := m.SetNote("work", "ends soon"); err != nil {
+		t.Fatalf("SetNote() error = %v", err)
+	}
+	if err := m.SetPlan("work", PlanPlus); err != nil {
+		t.Fatalf("SetPlan() error = %v", err)
+	}
+
+	snapshot, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if got := snapshot.Profiles[0]; got.Note != "ends soon" || got.Plan != PlanPlus {
+		t.Fatalf("profile = %#v, want preserved note and Plus plan", got)
+	}
+
+	if err := m.SetNote("work", "updated"); err != nil {
+		t.Fatalf("SetNote() error = %v", err)
+	}
+	snapshot, err = m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if got := snapshot.Profiles[0]; got.Note != "updated" || got.Plan != PlanPlus {
+		t.Fatalf("profile = %#v, want updated note and preserved Plus plan", got)
+	}
+
+	if err := m.SetNote("work", ""); err != nil {
+		t.Fatalf("SetNote(clear) error = %v", err)
+	}
+	snapshot, err = m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if got := snapshot.Profiles[0]; got.Note != "" || got.Plan != PlanPlus {
+		t.Fatalf("profile = %#v, want cleared note and preserved Plus plan", got)
+	}
+}
+
+func TestManagerSetPlanRejectsInvalidValue(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+
+	err := m.SetPlan("work", Plan("enterprise"))
+	if err == nil || !strings.Contains(err.Error(), "invalid profile plan") {
+		t.Fatalf("SetPlan() error = %v, want invalid plan error", err)
+	}
+}
+
+func TestManagerSnapshotRejectsMalformedMetadataWithoutRemovingLegacyNotes(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
+	if err := os.WriteFile(paths.metadataFile, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed metadata: %v", err)
+	}
+	writeProfileNotesFile(t, paths.legacyNotesFile, map[string]string{"work": "keep me"})
+
+	_, err := m.Snapshot()
+	if err == nil || !strings.Contains(err.Error(), "failed to parse profile metadata") {
+		t.Fatalf("Snapshot() error = %v, want metadata parse error", err)
+	}
+	assertFileExists(t, paths.metadataFile)
+	assertFileExists(t, paths.legacyNotesFile)
+}
+
+func TestManagerRenameMovesMetadata(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "old"), authFixture("account-rename", "api-rename"))
-	writeProfileNotesFile(t, paths.notesFile, map[string]string{"old": "tracked"})
+	writeProfileMetadataFile(t, paths.metadataFile, map[string]profileMetadata{
+		"old": {Note: "tracked", Plan: PlanPro},
+	})
 	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"old": testInstallationID(1)})
 
 	if err := m.Rename("old", "new", ""); err != nil {
@@ -429,6 +526,9 @@ func TestManagerRenameMovesNote(t *testing.T) {
 	if got := snapshot.Profiles[0].Note; got != "tracked" {
 		t.Fatalf("renamed note = %q, want %q", got, "tracked")
 	}
+	if got := snapshot.Profiles[0].Plan; got != PlanPro {
+		t.Fatalf("renamed plan = %q, want %q", got, PlanPro)
+	}
 	ids := readInstallationIDsFile(t, paths.installationIDsFile)
 	if got := ids["new"]; got != testInstallationID(1) {
 		t.Fatalf("installation ID for new = %q, want %q", got, testInstallationID(1))
@@ -438,23 +538,19 @@ func TestManagerRenameMovesNote(t *testing.T) {
 	}
 }
 
-func TestManagerDeleteRemovesNote(t *testing.T) {
+func TestManagerDeleteRemovesMetadata(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
-	writeProfileNotesFile(t, paths.notesFile, map[string]string{"work": "tracked"})
+	writeProfileMetadataFile(t, paths.metadataFile, map[string]profileMetadata{
+		"work": {Note: "tracked", Plan: PlanPlus},
+	})
 	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"work": testInstallationID(1)})
 
 	if err := m.Delete("work", ""); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	notes, err := readProfileNotes(paths.notesFile)
-	if err != nil {
-		t.Fatalf("readProfileNotes() error = %v", err)
-	}
-	if len(notes) != 0 {
-		t.Fatalf("notes = %#v, want empty", notes)
-	}
+	assertFileMissing(t, paths.metadataFile)
 	assertFileMissing(t, paths.installationIDsFile)
 }
 
@@ -463,7 +559,8 @@ type testManagerPaths struct {
 	installationIDFile  string
 	profileDir          string
 	markerFile          string
-	notesFile           string
+	metadataFile        string
+	legacyNotesFile     string
 	installationIDsFile string
 }
 
@@ -476,7 +573,8 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 		installationIDFile:  filepath.Join(root, "installation_id"),
 		profileDir:          filepath.Join(root, "auth_manager", "profiles"),
 		markerFile:          filepath.Join(root, "auth_manager", CurrentProfileMarkerName),
-		notesFile:           filepath.Join(root, "auth_manager", profileNotesFileName),
+		metadataFile:        filepath.Join(root, "auth_manager", profileMetadataFileName),
+		legacyNotesFile:     filepath.Join(root, "auth_manager", profileNotesFileName),
 		installationIDsFile: filepath.Join(root, "auth_manager", profileInstallationIDsFileName),
 	}
 
@@ -491,7 +589,8 @@ func newTestManager(t *testing.T) (Manager, testManagerPaths) {
 		InstallationIDFile:  paths.installationIDFile,
 		ProfileDir:          paths.profileDir,
 		CurrentProfileFile:  paths.markerFile,
-		NotesFile:           paths.notesFile,
+		MetadataFile:        paths.metadataFile,
+		LegacyNotesFile:     paths.legacyNotesFile,
 		InstallationIDsFile: paths.installationIDsFile,
 	}, paths
 }
@@ -570,6 +669,18 @@ func writeProfileNotesFile(t *testing.T, path string, notes map[string]string) {
 	data, err := json.Marshal(notes)
 	if err != nil {
 		t.Fatalf("Marshal notes fixture: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func writeProfileMetadataFile(t *testing.T, path string, metadata map[string]profileMetadata) {
+	t.Helper()
+
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("Marshal metadata fixture: %v", err)
 	}
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)

@@ -755,6 +755,7 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 		"  ",
 		"work",
 		"this note should wrap onto another line cleanly",
+		profilemgr.PlanFree,
 		false,
 		m.profileColumnWidth(),
 	)
@@ -763,7 +764,7 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 	if len(parts) < 2 {
 		t.Fatalf("rendered line did not wrap:\n%s", line)
 	}
-	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note should wrap") {
+	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note should") {
 		t.Fatalf("rendered first line missing inline note:\n%s", line)
 	}
 }
@@ -774,8 +775,8 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 		cursor:         0,
 		currentProfile: "work",
 		profiles: []profilemgr.ProfileSummary{
-			{Name: "work", Note: "current note"},
-			{Name: "personal", Note: "other note"},
+			{Name: "work", Note: "current note", Plan: profilemgr.PlanPro},
+			{Name: "personal", Note: "other note", Plan: profilemgr.PlanFree},
 		},
 	}
 
@@ -814,12 +815,120 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 	}
 }
 
+func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "z-pro", "acct-pro")
+	writeUIProfile(t, home, "z-plus", "acct-plus-z")
+	writeUIProfile(t, home, "a-plus", "acct-plus-a")
+	writeUIProfile(t, home, "a-free", "acct-free")
+	writeUIMetadata(t, home, `{
+  "z-pro": {"plan": "pro"},
+  "z-plus": {"plan": "plus"},
+  "a-plus": {"plan": "plus"}
+}`)
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	want := []string{"z-pro", "a-plus", "z-plus", "a-free"}
+	for i, name := range want {
+		if got := m.profiles[i].Name; got != name {
+			t.Fatalf("profiles[%d].Name = %q, want %q; profiles=%#v", i, got, name, m.profiles)
+		}
+	}
+}
+
+func TestCyclePlanReordersAndKeepsSelectedProfile(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "a-free", "acct-free")
+	writeUIProfile(t, home, "z-plus", "acct-plus")
+	writeUIMetadata(t, home, `{"z-plus":{"plan":"plus"}}`)
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.cursor = indexOfProfile(m.profiles, "a-free")
+
+	for _, want := range []struct {
+		plan   profilemgr.Plan
+		cursor int
+	}{
+		{profilemgr.PlanPlus, 0},
+		{profilemgr.PlanPro, 0},
+		{profilemgr.PlanFree, 1},
+	} {
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "p"}))
+		m = updated.(appModel)
+		if got := m.selectedProfile(); got.Name != "a-free" || got.Plan != want.plan {
+			t.Fatalf("selected profile = %#v, want a-free with plan %q", got, want.plan)
+		}
+		if m.cursor != want.cursor {
+			t.Fatalf("cursor = %d, want %d after cycling to %q", m.cursor, want.cursor, want.plan)
+		}
+	}
+}
+
+func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
+	rendered := map[profilemgr.Plan]string{
+		profilemgr.PlanFree: renderPlan(profilemgr.PlanFree),
+		profilemgr.PlanPlus: renderPlan(profilemgr.PlanPlus),
+		profilemgr.PlanPro:  renderPlan(profilemgr.PlanPro),
+	}
+	for plan, want := range map[profilemgr.Plan]string{
+		profilemgr.PlanFree: "Free",
+		profilemgr.PlanPlus: "Plus",
+		profilemgr.PlanPro:  "Pro",
+	} {
+		if got := strings.TrimSpace(stripANSI(rendered[plan])); got != want {
+			t.Fatalf("renderPlan(%q) = %q, want %q", plan, got, want)
+		}
+	}
+	if rendered[profilemgr.PlanFree] == rendered[profilemgr.PlanPlus] || rendered[profilemgr.PlanPlus] == rendered[profilemgr.PlanPro] {
+		t.Fatalf("plan styles are not distinct: %#v", rendered)
+	}
+}
+
+func TestFooterIncludesCyclePlanHint(t *testing.T) {
+	footer := stripANSI(appModel{mode: modeNormal}.renderFooter())
+	if !strings.Contains(footer, "p cycle plan") {
+		t.Fatalf("footer missing plan hint: %q", footer)
+	}
+	for _, line := range strings.Split(footer, "\n") {
+		if got := lipgloss.Width(line); got > 80 {
+			t.Fatalf("footer line width = %d, want at most 80: %q", got, line)
+		}
+	}
+}
+
 func profileViews(names ...string) []profilemgr.ProfileSummary {
 	profiles := make([]profilemgr.ProfileSummary, len(names))
 	for i, name := range names {
 		profiles[i] = profilemgr.ProfileSummary{Name: name}
 	}
 	return profiles
+}
+
+func writeUIProfile(t *testing.T, home, name, accountID string) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "auth_manager", "profiles", name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	body := fmt.Sprintf(`{"auth_mode":"account","tokens":{"account_id":%q}}`, accountID)
+	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+}
+
+func writeUIMetadata(t *testing.T, home, body string) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "auth_manager", ".profile-metadata.json")
+	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile metadata: %v", err)
+	}
 }
 
 func readTestFile(t *testing.T, path string) []byte {

@@ -9,6 +9,9 @@ var (
 	infoColor    = lipgloss.Color("#38BDF8")
 	errorColor   = lipgloss.Color("#F87171")
 	warningColor = lipgloss.Color("#FBBF24")
+	proColor     = lipgloss.Color("#F59E0B")
+	plusColor    = lipgloss.Color("#FBBF24")
+	freeColor    = lipgloss.Color("#FDE047")
 	mutedColor   = lipgloss.Color("#94A3B8")
 	panelBorder  = lipgloss.Color("#A78BFA")
 	headerTitle  = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
@@ -27,6 +30,16 @@ var (
 	selectedItemStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(accentColor)
+
+	proPlanStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(proColor)
+
+	plusPlanStyle = lipgloss.NewStyle().
+			Foreground(plusColor)
+
+	freePlanStyle = lipgloss.NewStyle().
+			Foreground(freeColor)
 
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)

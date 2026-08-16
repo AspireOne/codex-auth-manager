@@ -16,6 +16,7 @@ import (
 )
 
 const CurrentProfileMarkerName = "current-profile"
+const profileMetadataFileName = ".profile-metadata.json"
 const profileNotesFileName = ".profile-notes.json"
 const profileInstallationIDsFileName = ".profile-installation-ids.json"
 
@@ -31,6 +32,54 @@ type Snapshot struct {
 type ProfileSummary struct {
 	Name string
 	Note string
+	Plan Plan
+}
+
+type Plan string
+
+const (
+	PlanFree Plan = "free"
+	PlanPlus Plan = "plus"
+	PlanPro  Plan = "pro"
+)
+
+func (p Plan) Label() string {
+	switch p {
+	case PlanPro:
+		return "Pro"
+	case PlanPlus:
+		return "Plus"
+	case PlanFree:
+		return "Free"
+	default:
+		return "Free"
+	}
+}
+
+func (p Plan) Next() Plan {
+	switch p {
+	case PlanPlus:
+		return PlanPro
+	case PlanPro:
+		return PlanFree
+	case PlanFree:
+		return PlanPlus
+	default:
+		return PlanPlus
+	}
+}
+
+func (p Plan) Rank() int {
+	switch p {
+	case PlanPro:
+		return 0
+	case PlanPlus:
+		return 1
+	case PlanFree:
+		return 2
+	default:
+		return 2
+	}
 }
 
 type ProfileIssue struct {
@@ -43,7 +92,8 @@ type Manager struct {
 	InstallationIDFile  string
 	ProfileDir          string
 	CurrentProfileFile  string
-	NotesFile           string
+	MetadataFile        string
+	LegacyNotesFile     string
 	InstallationIDsFile string
 }
 
@@ -55,6 +105,11 @@ var (
 type profileScan struct {
 	Profiles        []ProfileSummary
 	InvalidProfiles []ProfileIssue
+}
+
+type profileMetadata struct {
+	Note string `json:"note,omitempty"`
+	Plan Plan   `json:"plan,omitempty"`
 }
 
 type authFileData struct {
@@ -83,7 +138,8 @@ func NewManager(codexDir string) Manager {
 		InstallationIDFile:  filepath.Join(codexDir, "installation_id"),
 		ProfileDir:          filepath.Join(managerDir, "profiles"),
 		CurrentProfileFile:  filepath.Join(managerDir, CurrentProfileMarkerName),
-		NotesFile:           filepath.Join(managerDir, profileNotesFileName),
+		MetadataFile:        filepath.Join(managerDir, profileMetadataFileName),
+		LegacyNotesFile:     filepath.Join(managerDir, profileNotesFileName),
 		InstallationIDsFile: filepath.Join(managerDir, profileInstallationIDsFileName),
 	}
 }
@@ -97,11 +153,11 @@ func (m Manager) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	notes, err := readProfileNotes(m.NotesFile)
+	metadata, err := m.loadProfileMetadata()
 	if err != nil {
-		notes = map[string]string{}
+		return Snapshot{}, err
 	}
-	applyProfileNotes(scan.Profiles, notes)
+	applyProfileMetadata(scan.Profiles, metadata)
 
 	snapshot := Snapshot{
 		Profiles:        scan.Profiles,
@@ -195,7 +251,7 @@ func (m Manager) Rename(oldName, newName, currentProfile string) error {
 	if err := renameProfile(m.ProfileDir, oldName, newName); err != nil {
 		return err
 	}
-	if err := m.renameNote(oldName, newName); err != nil {
+	if err := m.renameMetadata(oldName, newName); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	if err := m.renameInstallationID(oldName, newName); err != nil {
@@ -221,7 +277,7 @@ func (m Manager) Delete(name, currentProfile string) error {
 	if err := deleteProfile(m.ProfileDir, name); err != nil {
 		return err
 	}
-	if err := m.deleteNote(name); err != nil {
+	if err := m.deleteMetadata(name); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
 	if err := m.deleteInstallationID(name); err != nil {
@@ -262,7 +318,7 @@ func (m Manager) SetNote(name, note string) error {
 		return fmt.Errorf("profile %q not found", name)
 	}
 
-	notes, err := readProfileNotes(m.NotesFile)
+	metadata, err := m.loadProfileMetadata()
 	if err != nil {
 		return err
 	}
@@ -272,43 +328,58 @@ func (m Manager) SetNote(name, note string) error {
 		return err
 	}
 
-	if note == "" {
-		delete(notes, name)
-	} else {
-		notes[name] = note
-	}
-
-	if err := writeProfileNotes(m.NotesFile, notes); err != nil {
-		return err
-	}
-	return nil
+	entry := metadata[name]
+	entry.Note = note
+	metadata[name] = entry
+	return writeProfileMetadata(m.MetadataFile, metadata)
 }
 
-func (m Manager) renameNote(oldName, newName string) error {
-	notes, err := readProfileNotes(m.NotesFile)
+func (m Manager) SetPlan(name string, plan Plan) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("missing profile name")
+	}
+	if !fileExists(filepath.Join(m.ProfileDir, name)) {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	if err := validatePlan(plan); err != nil {
+		return err
+	}
+
+	metadata, err := m.loadProfileMetadata()
+	if err != nil {
+		return err
+	}
+	entry := metadata[name]
+	entry.Plan = plan
+	metadata[name] = entry
+	return writeProfileMetadata(m.MetadataFile, metadata)
+}
+
+func (m Manager) renameMetadata(oldName, newName string) error {
+	metadata, err := m.loadProfileMetadata()
 	if err != nil {
 		return err
 	}
 
-	note, ok := notes[oldName]
+	entry, ok := metadata[oldName]
 	if !ok {
 		return nil
 	}
-	delete(notes, oldName)
-	notes[newName] = note
-	return writeProfileNotes(m.NotesFile, notes)
+	delete(metadata, oldName)
+	metadata[newName] = entry
+	return writeProfileMetadata(m.MetadataFile, metadata)
 }
 
-func (m Manager) deleteNote(name string) error {
-	notes, err := readProfileNotes(m.NotesFile)
+func (m Manager) deleteMetadata(name string) error {
+	metadata, err := m.loadProfileMetadata()
 	if err != nil {
 		return err
 	}
-	if _, ok := notes[name]; !ok {
+	if _, ok := metadata[name]; !ok {
 		return nil
 	}
-	delete(notes, name)
-	return writeProfileNotes(m.NotesFile, notes)
+	delete(metadata, name)
+	return writeProfileMetadata(m.MetadataFile, metadata)
 }
 
 func (m Manager) syncActiveInstallationID(marker currentProfileMarker) error {
@@ -593,13 +664,56 @@ func profileNames(profiles []ProfileSummary) []string {
 	return names
 }
 
-func applyProfileNotes(profiles []ProfileSummary, notes map[string]string) {
+func applyProfileMetadata(profiles []ProfileSummary, metadata map[string]profileMetadata) {
 	for i := range profiles {
-		profiles[i].Note = notes[profiles[i].Name]
+		entry := metadata[profiles[i].Name]
+		profiles[i].Note = entry.Note
+		profiles[i].Plan = normalizedPlan(entry.Plan)
 	}
 }
 
-func readProfileNotes(path string) (map[string]string, error) {
+func (m Manager) loadProfileMetadata() (map[string]profileMetadata, error) {
+	if fileExists(m.MetadataFile) {
+		metadata, err := readProfileMetadata(m.MetadataFile)
+		if err != nil {
+			return nil, err
+		}
+		if err := removeLegacyNotesFile(m.LegacyNotesFile); err != nil {
+			return nil, err
+		}
+		return metadata, nil
+	}
+
+	if !fileExists(m.LegacyNotesFile) {
+		return map[string]profileMetadata{}, nil
+	}
+
+	notes, err := readLegacyProfileNotes(m.LegacyNotesFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to migrate profile notes: %w", err)
+	}
+	metadata := make(map[string]profileMetadata, len(notes))
+	for name, note := range notes {
+		metadata[name] = profileMetadata{Note: note, Plan: PlanFree}
+	}
+	if err := writeProfileMetadata(m.MetadataFile, metadata); err != nil {
+		return nil, fmt.Errorf("failed to migrate profile notes: %w", err)
+	}
+	if err := removeLegacyNotesFile(m.LegacyNotesFile); err != nil {
+		return nil, err
+	}
+	return metadata, nil
+}
+
+func removeLegacyNotesFile(path string) error {
+	err := os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to remove migrated profile notes: %w", err)
+	}
+	return nil
+}
+
+func readLegacyProfileNotes(path string) (map[string]string, error) {
 	if !fileExists(path) {
 		return map[string]string{}, nil
 	}
@@ -634,36 +748,80 @@ func readProfileNotes(path string) (map[string]string, error) {
 	return cleaned, nil
 }
 
-func writeProfileNotes(path string, notes map[string]string) error {
-	filtered := make(map[string]string, len(notes))
-	for name, note := range notes {
+func readProfileMetadata(path string) (map[string]profileMetadata, error) {
+	if !fileExists(path) {
+		return map[string]profileMetadata{}, nil
+	}
+
+	data, err := os.ReadFile(path) // #nosec G304 -- metadata path is derived from the configured Codex directory.
+	if err != nil {
+		return nil, fmt.Errorf("failed to read profile metadata: %w", err)
+	}
+
+	var metadata map[string]profileMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse profile metadata: %w", err)
+	}
+	if metadata == nil {
+		return map[string]profileMetadata{}, nil
+	}
+
+	cleaned := make(map[string]profileMetadata, len(metadata))
+	for name, entry := range metadata {
 		if !isValidProfileName(name) {
 			continue
 		}
-		validated, err := validateProfileNote(note)
+		note, err := validateProfileNote(entry.Note)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
+		}
+		if entry.Plan != "" {
+			if err := validatePlan(entry.Plan); err != nil {
+				return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
+			}
+		}
+		cleaned[name] = profileMetadata{Note: note, Plan: normalizedPlan(entry.Plan)}
+	}
+	return cleaned, nil
+}
+
+func writeProfileMetadata(path string, metadata map[string]profileMetadata) error {
+	filtered := make(map[string]profileMetadata, len(metadata))
+	for name, entry := range metadata {
+		if !isValidProfileName(name) {
+			continue
+		}
+		note, err := validateProfileNote(entry.Note)
 		if err != nil {
 			return err
 		}
-		if validated == "" {
+		plan := normalizedPlan(entry.Plan)
+		if err := validatePlan(plan); err != nil {
+			return err
+		}
+		if note == "" && plan == PlanFree {
 			continue
 		}
-		filtered[name] = validated
+		if plan == PlanFree {
+			plan = ""
+		}
+		filtered[name] = profileMetadata{Note: note, Plan: plan}
 	}
 
 	if len(filtered) == 0 {
 		err := os.Remove(path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("failed to clear profile notes: %w", err)
+			return fmt.Errorf("failed to clear profile metadata: %w", err)
 		}
 		return nil
 	}
 
 	body, err := json.MarshalIndent(filtered, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to encode profile notes: %w", err)
+		return fmt.Errorf("failed to encode profile metadata: %w", err)
 	}
 	if err := writeFileAtomically(path, append(body, '\n'), 0o600); err != nil {
-		return fmt.Errorf("failed to write profile notes: %w", err)
+		return fmt.Errorf("failed to write profile metadata: %w", err)
 	}
 	return nil
 }
@@ -813,6 +971,22 @@ func validateProfileNote(note string) (string, error) {
 		return "", errors.New("profile note cannot exceed 255 characters")
 	}
 	return note, nil
+}
+
+func validatePlan(plan Plan) error {
+	switch plan {
+	case PlanFree, PlanPlus, PlanPro:
+		return nil
+	default:
+		return fmt.Errorf("invalid profile plan %q; use free, plus, or pro", plan)
+	}
+}
+
+func normalizedPlan(plan Plan) Plan {
+	if plan == "" {
+		return PlanFree
+	}
+	return plan
 }
 
 func deleteProfile(profileDir, name string) error {
