@@ -323,6 +323,57 @@ func (m Manager) Activate(name string) error {
 	return nil
 }
 
+// ReplaceAndActivate installs freshly authenticated ChatGPT credentials for an
+// existing profile. It validates the account identity before changing any
+// persisted state.
+func (m Manager) ReplaceAndActivate(name, authPath string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("missing profile name")
+	}
+
+	targetPath, ok := findProfilePath([]string{m.ProfileDir}, name)
+	if !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	target, err := readAuthDescriptor(targetPath)
+	if err != nil {
+		return fmt.Errorf("failed to read profile %q: %w", name, err)
+	}
+	fresh, err := readAuthDescriptor(authPath)
+	if err != nil {
+		return fmt.Errorf("new credentials are invalid: %w", err)
+	}
+	if target.Kind != AuthKindChatGPT || fresh.Kind != AuthKindChatGPT {
+		return errors.New("re-authentication requires ChatGPT credentials")
+	}
+	if target.Identity.AccountID != fresh.Identity.AccountID {
+		return fmt.Errorf("signed-in account does not match profile %q", name)
+	}
+
+	if err := m.SyncTrackedProfile(); err != nil {
+		return err
+	}
+	if err := copyFile(authPath, targetPath); err != nil {
+		return fmt.Errorf("failed to update profile %q: %w", name, err)
+	}
+	if err := copyFile(authPath, m.AuthFile); err != nil {
+		return fmt.Errorf("%w: updated profile %q, but failed to activate it: %v", ErrStateChanged, name, err)
+	}
+
+	marker, err := markerForProfile(m.ProfileDir, name)
+	if err != nil {
+		return fmt.Errorf("%w: updated and activated profile %q, but failed to read its identity: %v", ErrStateChanged, name, err)
+	}
+	if err := writeCurrentProfileMarker(m.CurrentProfileFile, marker); err != nil {
+		return fmt.Errorf("%w: updated and activated profile %q, but failed to track it: %v", ErrStateChanged, name, err)
+	}
+	if err := m.setActiveInstallationIDForProfile(name); err != nil {
+		return fmt.Errorf("%w: updated and activated profile %q, but failed to write installation_id: %v", ErrStateChanged, name, err)
+	}
+
+	return nil
+}
+
 func (m Manager) SaveCurrent(label string) error {
 	descriptor, err := readAuthDescriptor(m.AuthFile)
 	if err != nil {

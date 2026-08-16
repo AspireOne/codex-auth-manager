@@ -1,18 +1,25 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/reauth"
 	"codex-manage/internal/ui"
 )
 
 var version = "dev"
+
+var newAuthenticator = func(manager profilemgr.Manager) reauth.Authenticator {
+	return reauth.New(manager)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.UserHomeDir, ui.Run))
@@ -26,11 +33,13 @@ func run(args []string, stdout, stderr io.Writer, userHomeDir func() (string, er
 	var list bool
 	var selectLong string
 	var selectShort string
+	var login string
 	flags.BoolVar(&showVersion, "version", false, "print version and exit")
 	flags.BoolVar(&list, "list", false, "list available profiles and exit")
 	flags.BoolVar(&list, "l", false, "list available profiles and exit")
 	flags.StringVar(&selectLong, "select", "", "select the profile by label and exit")
 	flags.StringVar(&selectShort, "s", "", "select the profile by label and exit")
+	flags.StringVar(&login, "login", "", "re-authenticate and activate a ChatGPT profile by label")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -43,12 +52,15 @@ func run(args []string, stdout, stderr io.Writer, userHomeDir func() (string, er
 
 	selectLongSet := false
 	selectShortSet := false
+	loginSet := false
 	flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "select":
 			selectLongSet = true
 		case "s":
 			selectShortSet = true
+		case "login":
+			loginSet = true
 		}
 	})
 
@@ -57,16 +69,34 @@ func run(args []string, stdout, stderr io.Writer, userHomeDir func() (string, er
 		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if list && hasSelect {
-		_, _ = fmt.Fprintln(stderr, "cannot use --list and --select together")
+	if loginSet && login == "" {
+		_, _ = fmt.Fprintln(stderr, "--login requires a profile name")
 		return 2
 	}
-	if (list || hasSelect) && flags.NArg() > 0 {
+	actions := 0
+	if list {
+		actions++
+	}
+	if hasSelect {
+		actions++
+	}
+	if loginSet {
+		actions++
+	}
+	if actions > 1 {
+		message := "cannot use --list, --select, and --login together"
+		if list && hasSelect && !loginSet {
+			message = "cannot use --list and --select together"
+		}
+		_, _ = fmt.Fprintln(stderr, message)
+		return 2
+	}
+	if flags.NArg() > 0 {
 		_, _ = fmt.Fprintf(stderr, "unexpected argument: %s\n", flags.Arg(0))
 		return 2
 	}
 
-	if list || hasSelect {
+	if actions > 0 {
 		manager, err := newProfileManager(userHomeDir)
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
@@ -79,10 +109,29 @@ func run(args []string, stdout, stderr io.Writer, userHomeDir func() (string, er
 			}
 			return 0
 		}
-		profile, err := profileByLabel(manager, selectedProfile)
+		label := selectedProfile
+		if loginSet {
+			label = login
+		}
+		profile, err := profileByLabel(manager, label)
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
+		}
+		if loginSet {
+			if profile.Kind != profilemgr.AuthKindChatGPT {
+				_, _ = fmt.Fprintln(stderr, "only ChatGPT profiles can be re-authenticated")
+				return 1
+			}
+			_, _ = fmt.Fprintf(stdout, "Authenticating profile %q. Complete the sign-in in the opened browser...\n", profile.Label)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer stop()
+			if err := newAuthenticator(manager).Reauthenticate(ctx, profile); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			_, _ = fmt.Fprintf(stdout, "Authenticated and activated profile %q. Restart Codex to apply.\n", profile.Label)
+			return 0
 		}
 		if err := manager.Activate(profile.Key); err != nil {
 			_, _ = fmt.Fprintln(stderr, err)

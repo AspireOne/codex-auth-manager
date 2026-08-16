@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,6 +20,21 @@ const testProfileNameWork = "work"
 
 func expectedChatGPTStorageKey(accountID string) string {
 	return "chatgpt-" + hashString("chatgpt\x00"+accountID)
+}
+
+func assertAuthFileContents(t *testing.T, path string, want map[string]any) {
+	t.Helper()
+	data, err := os.ReadFile(path) // #nosec G304 -- test fixture path is created under t.TempDir.
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", path, err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s contents = %#v, want %#v", path, got, want)
+	}
 }
 
 func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *testing.T) {
@@ -54,6 +70,85 @@ func TestManagerActivateRestoresMissingAuthAndWritesCurrentProfileMarker(t *test
 	}
 
 	assertInstallationIDMatchesProfile(t, m, paths, profileName)
+}
+
+func TestManagerReplaceAndActivateUpdatesMatchingChatGPTProfile(t *testing.T) {
+	m, paths := newTestManager(t)
+	targetPath := filepath.Join(paths.profileDir, testProfileNameWork)
+	writeAuthFile(t, targetPath, chatGPTAuthFixture("acct-work", "old@example.com"))
+	writeAuthFile(t, paths.authFile, chatGPTAuthFixture("acct-other", "other@example.com"))
+	freshPath := filepath.Join(t.TempDir(), "auth.json")
+	fresh := chatGPTAuthFixture("acct-work", "new@example.com")
+	writeAuthFile(t, freshPath, fresh)
+
+	if err := m.ReplaceAndActivate(testProfileNameWork, freshPath); err != nil {
+		t.Fatalf("ReplaceAndActivate() error = %v", err)
+	}
+
+	assertAuthFileContents(t, targetPath, fresh)
+	assertAuthFileContents(t, paths.authFile, fresh)
+	marker, err := readCurrentProfileMarker(paths.markerFile, paths.profileDir)
+	if err != nil {
+		t.Fatalf("readCurrentProfileMarker() error = %v", err)
+	}
+	if marker.Name != testProfileNameWork {
+		t.Fatalf("marker name = %q, want %q", marker.Name, testProfileNameWork)
+	}
+	assertInstallationIDMatchesProfile(t, m, paths, testProfileNameWork)
+}
+
+func TestManagerReplaceAndActivateRejectsMismatchedAccountWithoutChanges(t *testing.T) {
+	m, paths := newTestManager(t)
+	targetPath := filepath.Join(paths.profileDir, testProfileNameWork)
+	target := chatGPTAuthFixture("acct-work", "work@example.com")
+	active := chatGPTAuthFixture("acct-active", "active@example.com")
+	writeAuthFile(t, targetPath, target)
+	writeAuthFile(t, paths.authFile, active)
+	freshPath := filepath.Join(t.TempDir(), "auth.json")
+	writeAuthFile(t, freshPath, chatGPTAuthFixture("acct-wrong", "wrong@example.com"))
+
+	err := m.ReplaceAndActivate(testProfileNameWork, freshPath)
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("ReplaceAndActivate() error = %v, want account mismatch", err)
+	}
+
+	assertAuthFileContents(t, targetPath, target)
+	assertAuthFileContents(t, paths.authFile, active)
+	assertFileMissing(t, paths.markerFile)
+}
+
+func TestManagerReplaceAndActivateRejectsAPIKeyProfile(t *testing.T) {
+	m, paths := newTestManager(t)
+	targetPath := filepath.Join(paths.profileDir, "api")
+	writeAuthFile(t, targetPath, apiKeyAuthFixture("sk-old"))
+	freshPath := filepath.Join(t.TempDir(), "auth.json")
+	writeAuthFile(t, freshPath, chatGPTAuthFixture("acct-work", "work@example.com"))
+
+	err := m.ReplaceAndActivate("api", freshPath)
+	if err == nil || !strings.Contains(err.Error(), "requires ChatGPT") {
+		t.Fatalf("ReplaceAndActivate() error = %v, want ChatGPT-only error", err)
+	}
+}
+
+func TestManagerReplaceAndActivateSyncsPreviouslyActiveProfileFirst(t *testing.T) {
+	m, paths := newTestManager(t)
+	currentPath := filepath.Join(paths.profileDir, "current")
+	targetPath := filepath.Join(paths.profileDir, "target")
+	writeAuthFile(t, currentPath, chatGPTAuthFixture("acct-current", "current@example.com"))
+	writeAuthFile(t, targetPath, chatGPTAuthFixture("acct-target", "target@example.com"))
+	if err := m.Activate("current"); err != nil {
+		t.Fatalf("Activate(current) error = %v", err)
+	}
+	changedCurrent := chatGPTAuthFixture("acct-current", "changed@example.com")
+	changedCurrent["refreshed"] = true
+	writeAuthFile(t, paths.authFile, changedCurrent)
+	freshPath := filepath.Join(t.TempDir(), "auth.json")
+	writeAuthFile(t, freshPath, chatGPTAuthFixture("acct-target", "target@example.com"))
+
+	if err := m.ReplaceAndActivate("target", freshPath); err != nil {
+		t.Fatalf("ReplaceAndActivate(target) error = %v", err)
+	}
+	assertAuthFileContents(t, currentPath, changedCurrent)
 }
 
 func TestManagerSaveCurrentReturnsErrStateChangedAfterProfileIsSaved(t *testing.T) {

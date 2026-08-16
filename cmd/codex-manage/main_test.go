@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,20 @@ import (
 	"testing"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/reauth"
 )
+
+type fakeAuthenticator struct {
+	err     error
+	called  bool
+	profile profilemgr.ProfileSummary
+}
+
+func (a *fakeAuthenticator) Reauthenticate(_ context.Context, profile profilemgr.ProfileSummary) error {
+	a.called = true
+	a.profile = profile
+	return a.err
+}
 
 func TestRunListPrintsAvailableProfiles(t *testing.T) {
 	home := t.TempDir()
@@ -90,6 +104,72 @@ func TestRunSelectActivatesProfile(t *testing.T) {
 	ids := readCLIInstallationIDs(t, filepath.Join(codexDir, "auth_manager", ".profile-installation-ids.json"))
 	if ids["work"] != readCLIInstallationID(t, filepath.Join(codexDir, "installation_id")) {
 		t.Fatalf("profile installation ID = %q, want active installation_id", ids["work"])
+	}
+}
+
+func TestRunLoginAuthenticatesChatGPTProfile(t *testing.T) {
+	home := t.TempDir()
+	writeCLIAuthFile(t, filepath.Join(home, ".codex", "auth_manager", "profiles", "work"), "acct-work")
+	fake := &fakeAuthenticator{}
+	original := newAuthenticator
+	newAuthenticator = func(profilemgr.Manager) reauth.Authenticator { return fake }
+	t.Cleanup(func() { newAuthenticator = original })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--login", "acct-work@example.com"}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t))
+
+	if code != 0 {
+		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if !fake.called || fake.profile.Key != "work" {
+		t.Fatalf("authenticator call = %v/%#v, want work profile", fake.called, fake.profile)
+	}
+	for _, want := range []string{"Authenticating profile", "Authenticated and activated", "Restart Codex"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestRunLoginRejectsAPIKeyProfile(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".codex", "auth_manager", "profiles")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "api"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newProfileManager(func() (string, error) { return home, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := manager.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--login", snapshot.Profiles[0].Label}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t))
+	if code != 1 || !strings.Contains(stderr.String(), "only ChatGPT") {
+		t.Fatalf("code/stderr = %d/%q, want ChatGPT-only error", code, stderr.String())
+	}
+}
+
+func TestRunLoginRejectsEmptyAndConflictingFlags(t *testing.T) {
+	tests := [][]string{{"--login", ""}, {"--login", "work", "--list"}, {"--login", "work", "extra"}}
+	for _, args := range tests {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr, func() (string, error) { return t.TempDir(), nil }, failUIRun(t)); code != 2 {
+			t.Fatalf("run(%v) code = %d, stderr=%q; want 2", args, code, stderr.String())
+		}
 	}
 }
 

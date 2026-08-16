@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -15,6 +16,14 @@ import (
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/updatecheck"
 )
+
+type fakeUIAuthenticator struct {
+	run func(context.Context, profilemgr.ProfileSummary) error
+}
+
+func (a fakeUIAuthenticator) Reauthenticate(ctx context.Context, profile profilemgr.ProfileSummary) error {
+	return a.run(ctx, profile)
+}
 
 const testWorkProfileName = "work"
 
@@ -291,6 +300,85 @@ func TestRestartRequired(t *testing.T) {
 
 	if !m.restartRequired {
 		t.Error("restartRequired should be true after logout")
+	}
+}
+
+func TestAuthenticateKeyStartsExplicitBusyState(t *testing.T) {
+	m := appModel{
+		profiles:      []profilemgr.ProfileSummary{{Key: "work", Label: "work@example.com", Kind: profilemgr.AuthKindChatGPT}},
+		authenticator: fakeUIAuthenticator{run: func(context.Context, profilemgr.ProfileSummary) error { return nil }},
+	}
+
+	updatedModel, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "a"}))
+	got := updatedModel.(appModel)
+	if got.mode != modeAuthenticating || got.authProfileKey != "work" || cmd == nil {
+		t.Fatalf("mode/key/cmd = %v/%q/%v, want authenticating work", got.mode, got.authProfileKey, cmd)
+	}
+	if !strings.Contains(got.status, "Complete the sign-in") || !strings.Contains(stripANSI(got.renderFooter()), "cancel authentication") {
+		t.Fatalf("status/footer = %q/%q, want explicit waiting state", got.status, stripANSI(got.renderFooter()))
+	}
+}
+
+func TestAuthenticateRejectsAPIKeyProfile(t *testing.T) {
+	m := appModel{profiles: []profilemgr.ProfileSummary{{Key: "api", Label: "API", Kind: profilemgr.AuthKindAPIKey}}}
+	updatedModel, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "a"}))
+	got := updatedModel.(appModel)
+	if cmd != nil || got.mode != modeNormal || !strings.Contains(got.status, "Only ChatGPT") {
+		t.Fatalf("model/cmd = %#v/%v, want ChatGPT-only info", got, cmd)
+	}
+	if strings.Contains(stripANSI(got.renderFooter()), "authenticate") {
+		t.Fatalf("API key footer unexpectedly offers authentication: %s", stripANSI(got.renderFooter()))
+	}
+}
+
+func TestAuthenticateEscapeCancelsAndCompletionPreservesState(t *testing.T) {
+	started := make(chan struct{})
+	m := appModel{
+		profiles: []profilemgr.ProfileSummary{{Key: "work", Label: "work@example.com", Kind: profilemgr.AuthKindChatGPT}},
+		authenticator: fakeUIAuthenticator{run: func(ctx context.Context, _ profilemgr.ProfileSummary) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}},
+	}
+	updatedModel, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "a"}))
+	m = updatedModel.(appModel)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-started
+
+	updatedModel, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m = updatedModel.(appModel)
+	if m.mode != modeAuthenticating || m.status != "Cancelling authentication..." {
+		t.Fatalf("mode/status = %v/%q, want cancelling state", m.mode, m.status)
+	}
+	updatedModel, _ = m.Update(<-result)
+	m = updatedModel.(appModel)
+	if m.mode != modeNormal || !strings.Contains(m.status, "No credentials changed") || m.errText != "" {
+		t.Fatalf("model after cancellation = %#v", m)
+	}
+}
+
+func TestAuthenticationCompletionReloadsAndRequiresRestart(t *testing.T) {
+	home := t.TempDir()
+	profilePath := filepath.Join(home, ".codex", "auth_manager", "profiles", "work")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, uiChatGPTAuth("acct-work", "work@example.com"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	m.mode = modeAuthenticating
+	m.authProfileKey = "work"
+
+	updatedModel, _ := m.Update(authenticationFinishedMsg{profileKey: "work", label: "work@example.com"})
+	got := updatedModel.(appModel)
+	if got.mode != modeNormal || !got.restartRequired || !strings.Contains(got.status, "Authenticated and activated") {
+		t.Fatalf("model after success = %#v", got)
 	}
 }
 

@@ -228,6 +228,8 @@ func (m appModel) renderFooter() string {
 		return m.textInput.View()
 	case modeConfirm:
 		return footerStyle.Render(m.confirmPrompt)
+	case modeAuthenticating:
+		return footerStyle.Render(formatKeyHint("esc", "cancel authentication"))
 	case modeNormal:
 		navigationCommands := []string{
 			formatKeyHint("↑/↓", "move"),
@@ -236,6 +238,9 @@ func (m appModel) renderFooter() string {
 		}
 		profileCommands := []string{
 			formatKeyHint("n", "edit note"),
+		}
+		if m.selectedProfile().Kind == profilemgr.AuthKindChatGPT {
+			profileCommands = append(profileCommands, formatKeyHint("a", "authenticate"))
 		}
 		if m.selectedProfile().Kind == profilemgr.AuthKindAPIKey {
 			profileCommands = append(profileCommands, formatKeyHint("r", "edit label"))

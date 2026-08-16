@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,7 +11,10 @@ import (
 	profilemgr "codex-manage/internal/profiles"
 )
 
-const keyEnter = "enter"
+const (
+	keyEnter  = "enter"
+	keyEscape = "esc"
+)
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -36,6 +40,37 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case authenticationFinishedMsg:
+		if m.mode != modeAuthenticating || msg.profileKey != m.authProfileKey {
+			return m, nil
+		}
+		m.authCancel = nil
+		m.authProfileKey = ""
+		m.mode = modeNormal
+		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.setInfo("Authentication cancelled. No credentials changed.")
+				return m, nil
+			}
+			if errors.Is(msg.err, profilemgr.ErrStateChanged) {
+				m = m.reloadAndExitWithError(msg.err)
+				return m, nil
+			}
+			m.setError(msg.err.Error())
+			return m, nil
+		}
+		if err := m.reload(); err != nil {
+			m.setError(err.Error())
+			return m, nil
+		}
+		m.cursor = indexOfProfile(m.profiles, msg.profileKey)
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.setStatus(fmt.Sprintf("Authenticated and activated profile %q.", msg.label))
+		m.restartRequired = true
+		return m, nil
+
 	case tea.KeyPressMsg:
 		switch m.mode {
 		case modeNormal:
@@ -44,6 +79,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateInput(msg)
 		case modeConfirm:
 			return m.updateConfirm(msg)
+		case modeAuthenticating:
+			return m.updateAuthenticating(msg)
 		default:
 			return m.updateNormal(msg)
 		}
@@ -82,6 +119,9 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "n":
 		return m.enterEditNoteMode()
+
+	case "a":
+		return m.startAuthentication()
 
 	case "p":
 		return m.cycleSelectedPlan(), nil
@@ -139,6 +179,36 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m appModel) startAuthentication() (tea.Model, tea.Cmd) {
+	if len(m.profiles) == 0 {
+		m.setError("No profiles to authenticate.")
+		return m, nil
+	}
+	profile := m.selectedProfile()
+	if profile.Kind != profilemgr.AuthKindChatGPT {
+		m.setInfo("Only ChatGPT profiles can be re-authenticated.")
+		return m, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mode = modeAuthenticating
+	m.authCancel = cancel
+	m.authProfileKey = profile.Key
+	m.setInfo(fmt.Sprintf("Authenticating %q. Complete the sign-in in the opened browser; Esc cancels.", profile.Label))
+	return m, m.authenticateCmd(ctx, profile)
+}
+
+func (m appModel) updateAuthenticating(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case keyEscape, "ctrl+c":
+		if m.authCancel != nil {
+			m.authCancel()
+			m.authCancel = nil
+			m.setInfo("Cancelling authentication...")
+		}
+	}
+	return m, nil
+}
+
 func (m appModel) saveActiveAuth() (tea.Model, tea.Cmd) {
 	if !m.authActive {
 		m.setError("No active auth.json to save.")
@@ -165,7 +235,7 @@ func (m appModel) saveActiveAuth() (tea.Model, tea.Cmd) {
 func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
-		case "esc":
+		case keyEscape:
 			return m.cancelMode(), nil
 
 		case keyEnter:
@@ -219,7 +289,7 @@ func (m appModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m appModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
-	case "esc", "n", keyEnter:
+	case keyEscape, "n", keyEnter:
 		return m.cancelMode(), nil
 
 	case "y":

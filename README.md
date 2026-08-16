@@ -11,6 +11,7 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 - save ChatGPT auth automatically under its account identity
 - save API-key auth with an optional label or automatic fingerprint
 - activate another saved profile
+- re-authenticate an existing ChatGPT profile in its own browser session
 - assign Free, Plus, or Pro plans with paid plans grouped first
 - add a short note to a profile for quick context
 - edit API-key labels or delete saved profiles
@@ -129,6 +130,40 @@ Activate a saved profile by its displayed label:
 codex-manage --select matej@example.com
 codex-manage -s "Personal API project"
 ```
+
+Re-authenticate and activate an existing ChatGPT profile:
+
+```sh
+codex-manage --login matej@example.com
+```
+
+In the TUI, select a ChatGPT profile and press `a`. The status area remains in an authentication state until the browser flow finishes; press `Esc` to cancel. API-key profiles cannot use this workflow.
+
+## Browser-based re-authentication
+
+Re-authentication runs `codex app-server` with a private temporary `CODEX_HOME`, then opens the returned OAuth URL in a dedicated Chromium user-data directory. The temporary login must return the same ChatGPT `account_id` as the selected saved profile. Only after that check passes does `codex-manage` replace and activate the saved credentials. A cancelled, failed, malformed, or mismatched login leaves the saved profile and active `auth.json` unchanged.
+
+Brave, Chromium, Chrome, and Edge are supported. Detection prefers Brave, then Chromium, Chrome, and Edge. Override detection or storage when needed:
+
+| Environment variable | Purpose |
+| --- | --- |
+| `CODEX_MANAGE_BROWSER_EXECUTABLE` | Browser executable path or command name |
+| `CODEX_MANAGE_BROWSER_PROFILES_DIR` | Root for per-account browser data |
+| `CODEX_BRAVE_EXE` | Legacy Brave executable override |
+| `CODEX_BROWSER_PROFILES_DIR` | Legacy browser-profile root |
+
+Existing `codex-browser` data under `~/.codex-browser-profiles` (or the Windows user profile equivalent) is reused automatically. Within a root, the stable auth-manager profile key is preferred; an existing legacy directory derived from the account label/email is reused when present. Browser data is intentionally not deleted when an auth profile is deleted.
+
+Without an override or existing legacy root, new browser data is stored under:
+
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/codex-manage/browser-profiles/<browser>`
+- macOS: `~/Library/Application Support/codex-manage/browser-profiles/<browser>`
+- Windows: `%LOCALAPPDATA%\codex-manage\browser-profiles\<browser>`
+- WSL with a Windows browser: the Windows Local AppData location above
+
+These directories contain browser cookies and other session data, can grow substantially, and should be protected like any signed-in browser profile. Normal `codex login` and the Codex TUI `/login` remain untouched: `codex-manage` does not set or export `$BROWSER`.
+
+If you previously sourced `codex-login.zsh` from `codex-browser`, you can stop sourcing it after moving to `codex-manage --login`; no browser data migration is required.
 
 ChatGPT labels come from the email claim in `auth.json`; if it is unavailable, the UI shows a shortened account ID. API-key profiles use an optional custom label and otherwise show a non-secret SHA-256 fingerprint. Profile filenames are opaque internal keys and are not accepted by `--select`.
 

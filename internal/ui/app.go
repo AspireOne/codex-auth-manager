@@ -12,6 +12,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	profilemgr "codex-manage/internal/profiles"
+	"codex-manage/internal/reauth"
 	"codex-manage/internal/updatecheck"
 )
 
@@ -21,6 +22,7 @@ const (
 	modeNormal mode = iota
 	modeInput
 	modeConfirm
+	modeAuthenticating
 )
 
 type action int
@@ -44,6 +46,7 @@ const (
 
 type appModel struct {
 	profileManager profilemgr.Manager
+	authenticator  reauth.Authenticator
 
 	profiles        []profilemgr.ProfileSummary
 	cursor          int
@@ -67,6 +70,8 @@ type appModel struct {
 	statusKind      statusKind
 	errText         string
 	restartRequired bool
+	authCancel      context.CancelFunc
+	authProfileKey  string
 
 	quitting bool
 }
@@ -74,6 +79,12 @@ type appModel struct {
 type updateCheckMsg struct {
 	result updatecheck.Result
 	err    error
+}
+
+type authenticationFinishedMsg struct {
+	profileKey string
+	label      string
+	err        error
 }
 
 func Run(version string) error {
@@ -96,10 +107,22 @@ func Run(version string) error {
 
 func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
+	manager := profilemgr.NewManager(codexDir)
 	return appModel{
-		profileManager: profilemgr.NewManager(codexDir),
+		profileManager: manager,
+		authenticator:  reauth.New(manager),
 		textInput:      newTextInput(),
 		status:         "Ready.",
+	}
+}
+
+func (m appModel) authenticateCmd(ctx context.Context, profile profilemgr.ProfileSummary) tea.Cmd {
+	return func() tea.Msg {
+		return authenticationFinishedMsg{
+			profileKey: profile.Key,
+			label:      profile.Label,
+			err:        m.authenticator.Reauthenticate(ctx, profile),
+		}
 	}
 }
 
