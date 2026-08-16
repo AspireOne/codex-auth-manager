@@ -90,7 +90,10 @@ func TestProfileStatusCacheTreatsCorruptionUnknownSchemaAndReadFailureAsMissing(
 		{name: "corrupt JSON", setup: func(t *testing.T, manager Manager) {
 			writeStatusTestFile(t, manager.StatusCacheFile, []byte("{not-json"))
 		}},
-		{name: "unknown schema", setup: func(t *testing.T, manager Manager) {
+		{name: "poisoned version one cache", setup: func(t *testing.T, manager Manager) {
+			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":1,"profiles":{"work":{"fetched_at":"2026-08-16T12:00:00Z","auth_status":"sign_in_required"}}}`))
+		}},
+		{name: "unknown future schema", setup: func(t *testing.T, manager Manager) {
 			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":999,"profiles":{"work":{}}}`))
 		}},
 		{name: "read failure", setup: func(t *testing.T, manager Manager) {

@@ -11,7 +11,9 @@ import (
 	"time"
 )
 
-const profileStatusCacheVersion = 1
+// Version 2 invalidates authentication states written before requiresOpenaiAuth
+// was correctly recognized as a capability requirement rather than login state.
+const profileStatusCacheVersion = 2
 
 type ProfileAuthStatus string
 

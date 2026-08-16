@@ -1336,6 +1336,24 @@ func TestStatusTTLBoundaryAndAPIKeyExclusion(t *testing.T) {
 	}
 }
 
+func TestReloadRejectsVersionOneSignInCacheAndSchedulesRefetch(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	cachePath := filepath.Join(home, ".codex", "auth_manager", ".profile-status-cache.json")
+	legacy := `{"version":1,"profiles":{"chat@example.com":{"fetched_at":"2026-08-16T12:00:00Z","auth_status":"sign_in_required"}}}`
+	if err := os.WriteFile(cachePath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	view := m.profileStatuses["chat@example.com"]
+	if view.status != nil || view.phase != statusLoading || len(m.statusQueue) != 1 {
+		t.Fatalf("legacy cache was trusted: view=%#v queue=%v", view, m.statusQueue)
+	}
+}
+
 func TestStatusSchedulerProgressesQueueAndIgnoresLateEpoch(t *testing.T) {
 	profiles := []profilemgr.ProfileSummary{
 		{Key: "one", Kind: profilemgr.AuthKindChatGPT},
