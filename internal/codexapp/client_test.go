@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -61,8 +62,10 @@ func TestLauncherRunsProtocolAndCleansIsolatedHome(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
-		if got := info.Mode().Perm(); got != 0o600 {
-			t.Fatalf("%s permissions = %o, want 600", name, got)
+		if runtime.GOOS != "windows" {
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("%s permissions = %o, want 600", name, got)
+			}
 		}
 	}
 	var result struct {

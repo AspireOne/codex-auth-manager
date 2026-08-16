@@ -16,7 +16,10 @@ import (
 	"testing"
 )
 
-const testProfileNameWork = "work"
+const (
+	testProfileNameWork = "work"
+	windowsGOOS         = "windows"
+)
 
 func expectedChatGPTStorageKey(accountID string) string {
 	return "chatgpt-" + hashString("chatgpt\x00"+accountID)
@@ -629,7 +632,7 @@ func TestManagerSnapshotCreatesMissingAuthManagerDirectory(t *testing.T) {
 }
 
 func TestManagerSnapshotSecuresExistingDirectoriesAndManagedFiles(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsGOOS {
 		t.Skip("Windows does not expose POSIX permission bits")
 	}
 	m, paths := newTestManager(t)
@@ -819,7 +822,7 @@ func TestManagerSnapshotMigratesLegacyNotes(t *testing.T) {
 	}
 	assertFileMissing(t, paths.legacyNotesFile)
 	assertFileExists(t, paths.metadataFile)
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != windowsGOOS {
 		info, err := os.Stat(paths.metadataFile)
 		if err != nil {
 			t.Fatalf("Stat metadata: %v", err)
