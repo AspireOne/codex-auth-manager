@@ -79,6 +79,22 @@ CODEX_MANAGE_TEST_INSTALLED_CODEX=1 \
 
 See [Authentication testing](docs/authentication-testing.md) for the coverage matrix and optional live OAuth checklist.
 
+## Development checks
+
+Install [Lefthook](https://github.com/evilmartians/lefthook) once, then install this repository's Git hooks:
+
+```sh
+make hooks
+```
+
+The pre-commit hook formats and re-stages Go files, verifies both Go module graphs, runs golangci-lint and NilAway, runs the complete test suite with the race detector and cache disabled, and cross-builds the six release targets. The commit-message hook enforces Conventional Commits.
+
+Run the same checks without committing with:
+
+```sh
+make check
+```
+
 ## Release
 
 Create and push a release tag with:

@@ -8,16 +8,30 @@ pre-commit:
       run: go tool -modfile tools.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint fmt
       stage_fixed: true
     golangci-lint:
-      glob: "*.go"
+      glob:
+        - "*.{go,mod,sum,yml}"
+        - Makefile
       run: go tool -modfile tools.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint run
     go-test:
-      glob: "*.go"
-      run: go test -short ./...
+      glob:
+        - "*.{go,mod,sum,yml}"
+        - Makefile
+      run: go test -race -count=1 ./...
     nilaway:
-      glob: "*.go"
+      glob:
+        - "*.{go,mod,sum,yml}"
+        - Makefile
       run: go tool -modfile tools.mod go.uber.org/nilaway/cmd/nilaway -include-pkgs="codex-manage" ./...
-    go-mod-tidy:
-      run: go mod tidy && git --no-pager diff --exit-code go.mod go.sum tools.mod tools.sum
+    go-modules:
+      glob:
+        - "*.{go,mod,sum,yml}"
+        - Makefile
+      run: go mod tidy -diff && go mod verify && go mod verify -modfile=tools.mod
+    cross-build:
+      glob:
+        - "*.{go,mod,sum,yml}"
+        - Makefile
+      run: make cross-build
 
 commit-msg:
   commands:
