@@ -11,7 +11,8 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 - activate another saved profile
 - re-authenticate an existing ChatGPT profile in its own browser session
 - see cached ChatGPT quota usage, reset time, and authentication status
-- assign Free, Plus, or Pro plans with paid plans grouped first
+- assign Free, Plus, or Pro plans to ChatGPT profiles, with paid plans grouped first
+- identify API-key profiles with a distinct API plan
 - add a short note to a profile for quick context
 - edit API-key labels or delete saved profiles
 - log out by removing the active `auth.json`

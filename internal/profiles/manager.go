@@ -65,6 +65,7 @@ const (
 	PlanFree Plan = "free"
 	PlanPlus Plan = "plus"
 	PlanPro  Plan = "pro"
+	PlanAPI  Plan = "api"
 )
 
 func (p Plan) Label() string {
@@ -75,6 +76,8 @@ func (p Plan) Label() string {
 		return "Plus"
 	case PlanFree:
 		return "Free"
+	case PlanAPI:
+		return "API"
 	default:
 		return "Free"
 	}
@@ -88,6 +91,8 @@ func (p Plan) Next() Plan {
 		return PlanFree
 	case PlanFree:
 		return PlanPlus
+	case PlanAPI:
+		return PlanAPI
 	default:
 		return PlanPlus
 	}
@@ -101,6 +106,8 @@ func (p Plan) Rank() int {
 		return 1
 	case PlanFree:
 		return 2
+	case PlanAPI:
+		return 3
 	default:
 		return 2
 	}
@@ -494,11 +501,22 @@ func (m Manager) SetPlan(name string, plan Plan) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("missing profile name")
 	}
-	if !fileExists(filepath.Join(m.ProfileDir, name)) {
+	path := filepath.Join(m.ProfileDir, name)
+	if !fileExists(path) {
 		return fmt.Errorf("profile %q not found", name)
 	}
 	if err := validatePlan(plan); err != nil {
 		return err
+	}
+	descriptor, err := readAuthDescriptor(path)
+	if err != nil {
+		return fmt.Errorf("failed to read profile %q: %w", name, err)
+	}
+	if descriptor.Kind == AuthKindAPIKey && plan != PlanAPI {
+		return errors.New("API-key profiles always use the API plan")
+	}
+	if descriptor.Kind == AuthKindChatGPT && plan == PlanAPI {
+		return errors.New("the API plan is only available to API-key profiles")
 	}
 
 	metadata, err := m.loadProfileMetadata()
@@ -759,13 +777,20 @@ func applyProfileMetadata(profiles []ProfileSummary, metadata map[string]profile
 	for i := range profiles {
 		entry := metadata[profiles[i].Key]
 		profiles[i].Note = entry.Note
-		profiles[i].Plan = normalizedPlan(entry.Plan)
+		profiles[i].Plan = planForProfile(profiles[i].Kind, entry.Plan)
 		if profiles[i].Kind == AuthKindAPIKey {
 			profiles[i].CustomLabel = entry.Label
 		}
 		profiles[i].baseLabel = profileBaseLabel(profiles[i], entry.Label)
 	}
 	resolveProfileLabels(profiles)
+}
+
+func planForProfile(kind AuthKind, plan Plan) Plan {
+	if kind == AuthKindAPIKey {
+		return PlanAPI
+	}
+	return normalizedPlan(plan)
 }
 
 func profileByKey(profiles []ProfileSummary, key string) *ProfileSummary {
@@ -1222,10 +1247,10 @@ func validateLabelForAuth(kind AuthKind, label string) (string, error) {
 
 func validatePlan(plan Plan) error {
 	switch plan {
-	case PlanFree, PlanPlus, PlanPro:
+	case PlanFree, PlanPlus, PlanPro, PlanAPI:
 		return nil
 	default:
-		return fmt.Errorf("invalid profile plan %q; use free, plus, or pro", plan)
+		return fmt.Errorf("invalid profile plan %q; use free, plus, pro, or api", plan)
 	}
 }
 

@@ -22,6 +22,7 @@ var (
 	proColor     = lipgloss.Color("#F59E0B")
 	plusColor    = lipgloss.Color("#FBBF24")
 	freeColor    = lipgloss.Color("#FDE047")
+	apiColor     = lipgloss.Color("#F5D0A9")
 	mutedColor   = lipgloss.Color("#94A3B8")
 	panelBorder  = lipgloss.Color("#A78BFA")
 	headerTitle  = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
@@ -50,6 +51,9 @@ var (
 
 	freePlanStyle = lipgloss.NewStyle().
 			Foreground(freeColor)
+
+	apiPlanStyle = lipgloss.NewStyle().
+			Foreground(apiColor)
 
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)

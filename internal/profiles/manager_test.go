@@ -316,7 +316,7 @@ func TestManagerAPIKeyLabelDefaultsToFingerprintAndCanBeEditedOrReset(t *testing
 	}
 	sum := sha256.Sum256([]byte(key))
 	wantDefault := "API key · " + hex.EncodeToString(sum[:])[:8]
-	if got := snapshot.Profiles[0]; got.Label != wantDefault || got.CustomLabel != "" || got.Kind != AuthKindAPIKey {
+	if got := snapshot.Profiles[0]; got.Label != wantDefault || got.CustomLabel != "" || got.Kind != AuthKindAPIKey || got.Plan != PlanAPI {
 		t.Fatalf("profile = %#v, want default API fingerprint", got)
 	}
 
@@ -909,6 +909,22 @@ func TestManagerSetPlanRejectsInvalidValue(t *testing.T) {
 	err := m.SetPlan("work", Plan("enterprise"))
 	if err == nil || !strings.Contains(err.Error(), "invalid profile plan") {
 		t.Fatalf("SetPlan() error = %v, want invalid plan error", err)
+	}
+}
+
+func TestManagerSetPlanRestrictsAPIPlanToAPIKeyProfiles(t *testing.T) {
+	m, paths := newTestManager(t)
+	writeAuthFile(t, filepath.Join(paths.profileDir, "chat"), authFixture("account-chat", "api-chat"))
+	writeAuthFile(t, filepath.Join(paths.profileDir, "api"), apiKeyAuthFixture("sk-api"))
+
+	if err := m.SetPlan("chat", PlanAPI); err == nil || !strings.Contains(err.Error(), "only available") {
+		t.Fatalf("SetPlan(chat, API) error = %v, want API plan restriction", err)
+	}
+	if err := m.SetPlan("api", PlanFree); err == nil || !strings.Contains(err.Error(), "always use") {
+		t.Fatalf("SetPlan(api, Free) error = %v, want API plan restriction", err)
+	}
+	if err := m.SetPlan("api", PlanAPI); err != nil {
+		t.Fatalf("SetPlan(api, API) error = %v", err)
 	}
 }
 

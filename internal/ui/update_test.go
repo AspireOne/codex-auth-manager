@@ -1189,6 +1189,28 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 			t.Fatalf("profiles[%d].Key = %q, want %q; profiles=%#v", i, got, name, m.profiles)
 		}
 	}
+	if got := m.profiles[len(m.profiles)-1].Plan; got != profilemgr.PlanAPI {
+		t.Fatalf("API-key profile plan = %q, want %q", got, profilemgr.PlanAPI)
+	}
+}
+
+func TestCyclePlanLeavesAPIKeyOnAPIPlan(t *testing.T) {
+	home := t.TempDir()
+	writeUIAPIProfile(t, home, "api")
+
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "p"}))
+	m = updated.(appModel)
+	if got := m.selectedProfile().Plan; got != profilemgr.PlanAPI {
+		t.Fatalf("selected profile plan = %q, want %q", got, profilemgr.PlanAPI)
+	}
+	if !strings.Contains(m.status, "API-key profiles use the API plan") {
+		t.Fatalf("status = %q, want API plan explanation", m.status)
+	}
 }
 
 func TestCyclePlanReordersAndKeepsSelectedProfile(t *testing.T) {
@@ -1227,17 +1249,19 @@ func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 		profilemgr.PlanFree: renderPlan(profilemgr.PlanFree),
 		profilemgr.PlanPlus: renderPlan(profilemgr.PlanPlus),
 		profilemgr.PlanPro:  renderPlan(profilemgr.PlanPro),
+		profilemgr.PlanAPI:  renderPlan(profilemgr.PlanAPI),
 	}
 	for plan, want := range map[profilemgr.Plan]string{
 		profilemgr.PlanFree: "Free",
 		profilemgr.PlanPlus: "Plus",
 		profilemgr.PlanPro:  "Pro",
+		profilemgr.PlanAPI:  "API",
 	} {
 		if got := strings.TrimSpace(stripANSI(rendered[plan])); got != want {
 			t.Fatalf("renderPlan(%q) = %q, want %q", plan, got, want)
 		}
 	}
-	if rendered[profilemgr.PlanFree] == rendered[profilemgr.PlanPlus] || rendered[profilemgr.PlanPlus] == rendered[profilemgr.PlanPro] {
+	if rendered[profilemgr.PlanFree] == rendered[profilemgr.PlanPlus] || rendered[profilemgr.PlanPlus] == rendered[profilemgr.PlanPro] || rendered[profilemgr.PlanPro] == rendered[profilemgr.PlanAPI] {
 		t.Fatalf("plan styles are not distinct: %#v", rendered)
 	}
 }

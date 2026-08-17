@@ -286,6 +286,8 @@ func renderPlan(plan profilemgr.Plan) string {
 		style = plusPlanStyle
 	case profilemgr.PlanFree:
 		style = freePlanStyle
+	case profilemgr.PlanAPI:
+		style = apiPlanStyle
 	}
 	return style.Render(label) + strings.Repeat(" ", planColumnWidth-lipgloss.Width(label))
 }

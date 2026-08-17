@@ -439,6 +439,10 @@ func (m appModel) cycleSelectedPlan() appModel {
 	}
 
 	selected := m.selectedProfile()
+	if selected.Kind == profilemgr.AuthKindAPIKey {
+		m.setInfo("API-key profiles use the API plan.")
+		return m
+	}
 	nextPlan := selected.Plan.Next()
 	if err := m.profileManager.SetPlan(selected.Key, nextPlan); err != nil {
 		return m.handleActionError(err)
