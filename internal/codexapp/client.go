@@ -17,7 +17,11 @@ import (
 	"time"
 )
 
-const stderrTailLimit = 8 * 1024
+const (
+	stderrTailLimit = 8 * 1024
+	rpcMethodKey    = "method"
+	rpcParamsKey    = "params"
+)
 
 var (
 	diagnosticAuthorizationPattern = regexp.MustCompile(`(?im)(authorization\s*[:=]\s*)[^\r\n]+`)
@@ -161,7 +165,7 @@ func (l Launcher) Start(ctx context.Context, executable string, seed Seed) (*Ses
 func (s *Session) Request(ctx context.Context, method string, params, result any) error {
 	id := s.nextID
 	s.nextID++
-	if err := s.write(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+	if err := s.write(map[string]any{"id": id, rpcMethodKey: method, rpcParamsKey: params}); err != nil {
 		return s.protocolError("failed to send request to Codex app-server", err)
 	}
 	for {
@@ -216,7 +220,7 @@ func (s *Session) next(ctx context.Context) (protocolMessage, error) {
 }
 
 func (s *Session) Notify(method string, params any) error {
-	return s.write(map[string]any{"method": method, "params": params})
+	return s.write(map[string]any{rpcMethodKey: method, rpcParamsKey: params})
 }
 
 // SendRequest sends a best-effort request whose response the caller does not
@@ -224,7 +228,7 @@ func (s *Session) Notify(method string, params any) error {
 func (s *Session) SendRequest(method string, params any) error {
 	id := s.nextID
 	s.nextID++
-	return s.write(map[string]any{"id": id, "method": method, "params": params})
+	return s.write(map[string]any{"id": id, rpcMethodKey: method, rpcParamsKey: params})
 }
 
 func (s *Session) ReadAuth() ([]byte, error) {
@@ -243,7 +247,7 @@ func (s *Session) Close() {
 			case <-time.After(time.Second):
 			}
 		}
-		_ = os.RemoveAll(s.root)
+		_ = os.RemoveAll(s.root) // #nosec G703 -- managed session temp dir.
 	})
 }
 

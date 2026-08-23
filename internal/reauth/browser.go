@@ -20,6 +20,11 @@ const (
 	legacyBraveEnv       = "CODEX_BRAVE_EXE"
 	legacyProfilesEnv    = "CODEX_BROWSER_PROFILES_DIR"
 	windowsOS            = "windows"
+
+	browserNameBrave    = "brave"
+	browserNameChromium = "chromium"
+	browserNameChrome   = "chrome"
+	browserNameEdge     = "edge"
 )
 
 type browserLauncher struct {
@@ -100,7 +105,7 @@ func (b *browserLauncher) resolveBrowser() (browserSelection, error) {
 	}
 	if value := strings.TrimSpace(b.getenv(legacyBraveEnv)); value != "" {
 		selection, err := b.explicitBrowser(value)
-		selection.name = "brave"
+		selection.name = browserNameBrave
 		return selection, err
 	}
 
@@ -161,10 +166,10 @@ type browserCandidate struct {
 func (b *browserLauncher) browserCandidates() []browserCandidate {
 	if b.goos == "darwin" {
 		return []browserCandidate{
-			{name: "brave", value: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", path: true},
-			{name: "chromium", value: "/Applications/Chromium.app/Contents/MacOS/Chromium", path: true},
-			{name: "chrome", value: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", path: true},
-			{name: "edge", value: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", path: true},
+			{name: browserNameBrave, value: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", path: true},
+			{name: browserNameChromium, value: "/Applications/Chromium.app/Contents/MacOS/Chromium", path: true},
+			{name: browserNameChrome, value: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", path: true},
+			{name: browserNameEdge, value: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", path: true},
 		}
 	}
 	if b.goos == windowsOS || b.isWSL() {
@@ -177,14 +182,14 @@ func (b *browserLauncher) browserCandidates() []browserCandidate {
 			programFilesX86 = b.windowsEnvironment("ProgramFiles(x86)")
 		}
 		paths := []browserCandidate{
-			{name: "brave", value: filepath.Join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), path: true, windows: true},
-			{name: "brave", value: filepath.Join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), path: true, windows: true},
-			{name: "chromium", value: filepath.Join(local, "Chromium", "Application", "chrome.exe"), path: true, windows: true},
-			{name: "chrome", value: filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
-			{name: "chrome", value: filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
-			{name: "chrome", value: filepath.Join(local, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
-			{name: "edge", value: filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"), path: true, windows: true},
-			{name: "edge", value: filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), path: true, windows: true},
+			{name: browserNameBrave, value: filepath.Join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), path: true, windows: true},
+			{name: browserNameBrave, value: filepath.Join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), path: true, windows: true},
+			{name: browserNameChromium, value: filepath.Join(local, "Chromium", "Application", "chrome.exe"), path: true, windows: true},
+			{name: browserNameChrome, value: filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
+			{name: browserNameChrome, value: filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
+			{name: browserNameChrome, value: filepath.Join(local, "Google", "Chrome", "Application", "chrome.exe"), path: true, windows: true},
+			{name: browserNameEdge, value: filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"), path: true, windows: true},
+			{name: browserNameEdge, value: filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), path: true, windows: true},
 		}
 		if b.isWSL() {
 			for i := range paths {
@@ -196,10 +201,10 @@ func (b *browserLauncher) browserCandidates() []browserCandidate {
 		return paths
 	}
 	return []browserCandidate{
-		{name: "brave", value: "brave-browser"}, {name: "brave", value: "brave"},
-		{name: "chromium", value: "chromium"}, {name: "chromium", value: "chromium-browser"},
-		{name: "chrome", value: "google-chrome"}, {name: "chrome", value: "google-chrome-stable"},
-		{name: "edge", value: "microsoft-edge"}, {name: "edge", value: "microsoft-edge-stable"},
+		{name: browserNameBrave, value: "brave-browser"}, {name: browserNameBrave, value: "brave"},
+		{name: browserNameChromium, value: "chromium"}, {name: browserNameChromium, value: "chromium-browser"},
+		{name: browserNameChrome, value: "google-chrome"}, {name: browserNameChrome, value: "google-chrome-stable"},
+		{name: browserNameEdge, value: "microsoft-edge"}, {name: browserNameEdge, value: "microsoft-edge-stable"},
 	}
 }
 
@@ -334,13 +339,13 @@ func browserName(path string) string {
 	base := strings.ToLower(filepath.Base(path))
 	switch {
 	case strings.Contains(base, "brave"):
-		return "brave"
+		return browserNameBrave
 	case strings.Contains(base, "chromium"):
-		return "chromium"
+		return browserNameChromium
 	case strings.Contains(base, "edge"), strings.Contains(base, "msedge"):
-		return "edge"
+		return browserNameEdge
 	default:
-		return "chrome"
+		return browserNameChrome
 	}
 }
 

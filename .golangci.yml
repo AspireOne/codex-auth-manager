@@ -17,6 +17,9 @@ linters:
     - gocritic
     - goconst
     - exhaustive
+  settings:
+    goconst:
+      ignore-tests: true
 
 formatters:
   enable:

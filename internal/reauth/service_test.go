@@ -223,7 +223,7 @@ func newTestService(t *testing.T, scenario, loginAccount string) (*Service, prof
 	service.browser = fakeBrowser{}
 	service.lookPath = func(string) (string, error) { return os.Args[0], nil }
 	service.command = func(_ string, _ ...string) *exec.Cmd {
-		return exec.Command(os.Args[0], "-test.run=TestReauthHelperProcess", "--", "--helper", scenario, loginAccount) // #nosec G204 -- test helper invocation.
+		return exec.Command(os.Args[0], "-test.run=TestReauthHelperProcess", "--", "--helper", scenario, loginAccount) // #nosec G204,G702 -- test helper invocation.
 	}
 	return service, manager, snapshot.Profiles[0]
 }
@@ -287,7 +287,7 @@ func TestReauthHelperProcess(t *testing.T) {
 func writeHelperAuth(accountID string) {
 	home := os.Getenv("CODEX_HOME")
 	data := testAuthData(accountID, true)
-	if err := os.WriteFile(filepath.Join(home, "auth.json"), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), data, 0o600); err != nil { // #nosec G703 -- test-controlled temp path.
 		os.Exit(3)
 	}
 }

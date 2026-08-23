@@ -208,7 +208,7 @@ func TestInstalledCodexStatusAgainstIsolatedProfileCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	profileKey := filepath.Base(source)
-	if err := os.WriteFile(filepath.Join(manager.ProfileDir, profileKey), auth, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(manager.ProfileDir, profileKey), auth, 0o600); err != nil { // #nosec G703 -- test-controlled temp path.
 		t.Fatal(err)
 	}
 	sourceDir := filepath.Dir(source)
@@ -219,12 +219,12 @@ func TestInstalledCodexStatusAgainstIsolatedProfileCopy(t *testing.T) {
 		sourceManagerDir = filepath.Join(sourceCodexDir, "auth_manager")
 	}
 	if config, err := os.ReadFile(filepath.Join(sourceCodexDir, "config.toml")); err == nil { //nolint:gosec // Explicit smoke-test source.
-		if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), config, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), config, 0o600); err != nil { // #nosec G703 -- test-controlled temp path.
 			t.Fatal(err)
 		}
 	}
 	if ids, err := os.ReadFile(filepath.Join(sourceManagerDir, ".profile-installation-ids.json")); err == nil { //nolint:gosec // Explicit smoke-test source.
-		if err := os.WriteFile(manager.InstallationIDsFile, ids, 0o600); err != nil {
+		if err := os.WriteFile(manager.InstallationIDsFile, ids, 0o600); err != nil { // #nosec G703 -- test-controlled temp path.
 			t.Fatal(err)
 		}
 	} else if installationID, err := os.ReadFile(filepath.Join(sourceCodexDir, "installation_id")); err == nil { //nolint:gosec // Explicit smoke-test source.
@@ -232,7 +232,7 @@ func TestInstalledCodexStatusAgainstIsolatedProfileCopy(t *testing.T) {
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
-		if err := os.WriteFile(manager.InstallationIDsFile, ids, 0o600); err != nil {
+		if err := os.WriteFile(manager.InstallationIDsFile, ids, 0o600); err != nil { // #nosec G703 -- test-controlled temp path.
 			t.Fatal(err)
 		}
 	}
@@ -274,7 +274,7 @@ func newTestQueryer(t *testing.T, scenario string, active bool) (*Queryer, profi
 	roots := &[]string{}
 	launcher := codexapp.DefaultLauncher()
 	launcher.Command = func(string, ...string) *exec.Cmd {
-		return exec.Command(os.Args[0], "-test.run=TestStatusHelperProcess", "--", "--status-helper", scenario) // #nosec G204 -- test helper invocation.
+		return exec.Command(os.Args[0], "-test.run=TestStatusHelperProcess", "--", "--status-helper", scenario) // #nosec G204,G702 -- test helper invocation.
 	}
 	launcher.TempDir = func(_, pattern string) (string, error) {
 		root, err := os.MkdirTemp(t.TempDir(), pattern)
@@ -311,10 +311,10 @@ func TestStatusHelperProcess(t *testing.T) {
 				fmt.Printf(`{"id":%d,"error":{"code":-32000,"message":"ChatGPT authentication required"}}`+"\n", request.ID)
 			default:
 				if scenario == "refresh" {
-					_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), statusTestAuth("acct", "new"), 0o600)
+					_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), statusTestAuth("acct", "new"), 0o600) // #nosec G703 -- test-controlled temp path.
 				}
 				if scenario == "wrong-refresh" {
-					_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), statusTestAuth("other", "new"), 0o600)
+					_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), statusTestAuth("other", "new"), 0o600) // #nosec G703 -- test-controlled temp path.
 				}
 				fmt.Printf(`{"id":%d,"result":{"account":{"type":"chatgpt","email":"test@example.com","planType":"plus"},"requiresOpenaiAuth":true}}`+"\n", request.ID)
 			}
@@ -354,7 +354,7 @@ func statusTestAuth(accountID, refresh string) []byte {
 
 func readStatusTestFile(t *testing.T, path string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(path) // #nosec G304 -- test-controlled path or explicit smoke-test source.
+	data, err := os.ReadFile(path) // #nosec G304,G703 -- test-controlled path or explicit smoke-test source.
 	if err != nil {
 		t.Fatal(err)
 	}

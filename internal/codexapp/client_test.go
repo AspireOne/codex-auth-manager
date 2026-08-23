@@ -136,7 +136,7 @@ func TestSanitizeDiagnosticsRedactsCredentialShapes(t *testing.T) {
 func testLauncher(scenario string) Launcher {
 	launcher := DefaultLauncher()
 	launcher.Command = func(string, ...string) *exec.Cmd {
-		return exec.Command(os.Args[0], "-test.run=TestClientHelperProcess", "--", "--client-helper", scenario) // #nosec G204 -- test helper invocation.
+		return exec.Command(os.Args[0], "-test.run=TestClientHelperProcess", "--", "--client-helper", scenario) // #nosec G204,G702 -- test helper invocation.
 	}
 	return launcher
 }

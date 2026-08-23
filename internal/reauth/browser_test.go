@@ -104,7 +104,7 @@ func TestBrowserUsesLegacyProfileDirectoryWhenPresent(t *testing.T) {
 	}
 	browser.command = func(_ string, args ...string) *exec.Cmd {
 		gotArgs = append([]string(nil), args...)
-		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204 -- test helper invocation.
+		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204,G702 -- test helper invocation.
 	}
 
 	err := browser.Open(profilemgr.ProfileSummary{Key: "chatgpt-stable", Label: "person@example.com"}, "https://chatgpt.com/oauth")
@@ -167,7 +167,7 @@ func TestWSLBrowserReceivesWindowsProfilePath(t *testing.T) {
 	}
 	browser.command = func(_ string, args ...string) *exec.Cmd {
 		gotArgs = append([]string(nil), args...)
-		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204 -- test helper invocation.
+		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204,G702 -- test helper invocation.
 	}
 
 	err = browser.Open(profilemgr.ProfileSummary{Key: "chatgpt-stable", Label: "person@example.com"}, "https://chatgpt.com/oauth")
@@ -209,7 +209,7 @@ func TestWSLNativeBrowserKeepsLinuxProfilePath(t *testing.T) {
 	}
 	browser.command = func(_ string, args ...string) *exec.Cmd {
 		gotArgs = append([]string(nil), args...)
-		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204 -- test helper invocation.
+		return exec.Command(os.Args[0], "-test.run=TestDetachedBrowserHelper") // #nosec G204,G702 -- test helper invocation.
 	}
 
 	if err := browser.Open(profilemgr.ProfileSummary{Key: "chatgpt-stable", Label: "person@example.com"}, "https://chatgpt.com/oauth"); err != nil {
