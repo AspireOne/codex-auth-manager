@@ -242,6 +242,8 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.setError(err.Error())
 			return m, nil
 		}
+		m.cancelStatusFetches()
+		m.queueStatusRefresh()
 		m.setStatus("Refreshed.")
 		return m, tea.Batch(m.updateCheckCmd(), m.dispatchStatusFetches())
 	}

@@ -1449,6 +1449,66 @@ func TestReloadRejectsVersionOneSignInCacheAndSchedulesRefetch(t *testing.T) {
 	}
 }
 
+func TestRefreshKeyForcesStatusRefetchForAllChatGPTProfiles(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "one@example.com", "one")
+	writeUIProfile(t, home, "two@example.com", "two")
+	writeUIAPIProfile(t, home, "api")
+	m := newAppModel(home)
+	m.statusFetcher = fakeStatusFetcher{run: func(context.Context, profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error) {
+		return profilemgr.ProfileStatus{}, errors.New("unused")
+	}}
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	percent := 10
+	reset := time.Now().Add(time.Hour)
+	for _, key := range []string{"one@example.com", "two@example.com"} {
+		if err := m.profileManager.SaveProfileStatus(key, profilemgr.ProfileStatus{
+			FetchedAt: m.now(), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.statusQueue) != 0 {
+		t.Fatalf("fresh cache before refresh = queue %v, want empty", m.statusQueue)
+	}
+
+	wantQueue := []string{"one@example.com", "two@example.com"}
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	got := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("ctrl+r cmd = nil")
+	}
+	if got.status != "Refreshed." {
+		t.Fatalf("status = %q, want Refreshed.", got.status)
+	}
+	if len(got.statusCancels) != 2 {
+		t.Fatalf("in-flight fetches = %v, want both ChatGPT profiles refetched", got.statusCancels)
+	}
+	for _, key := range wantQueue {
+		if _, ok := got.statusCancels[key]; !ok {
+			t.Fatalf("missing in-flight fetch for %q", key)
+		}
+	}
+	if len(got.statusQueue) != 0 {
+		t.Fatalf("queue = %v, want empty after dispatch", got.statusQueue)
+	}
+	for _, key := range wantQueue {
+		view := got.profileStatuses[key]
+		if view.phase != statusLoading || !view.stale {
+			t.Fatalf("view %q = %#v, want loading with retained stale cache", key, view)
+		}
+	}
+	if _, api := got.profileStatuses["api"]; api {
+		t.Fatal("API-key profile was queued for a status refresh")
+	}
+	got.cancelStatusFetches()
+}
+
 func TestStatusSchedulerProgressesQueueAndIgnoresLateEpoch(t *testing.T) {
 	profiles := []profilemgr.ProfileSummary{
 		{Key: "one", Kind: profilemgr.AuthKindChatGPT},

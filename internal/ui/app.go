@@ -304,6 +304,19 @@ func (m *appModel) cancelStatusFetches() {
 	}
 }
 
+func (m *appModel) queueStatusRefresh() {
+	for _, profile := range m.profiles {
+		if profile.Kind != profilemgr.AuthKindChatGPT {
+			continue
+		}
+		view := m.profileStatuses[profile.Key]
+		view.phase = statusLoading
+		view.stale = view.status != nil
+		m.profileStatuses[profile.Key] = view
+		m.statusQueue = append(m.statusQueue, profile.Key)
+	}
+}
+
 func (m *appModel) syncTrackedProfile() error {
 	return m.profileManager.SyncTrackedProfile()
 }
