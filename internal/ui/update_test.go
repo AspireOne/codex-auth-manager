@@ -101,7 +101,8 @@ func TestBrowserStatusMessageDescribesBrowserOrUnavailable(t *testing.T) {
 	if updated.browserAuthStatus != "Brave · isolated profiles" {
 		t.Fatalf("browserAuthStatus = %q", updated.browserAuthStatus)
 	}
-	if header := stripANSI(updated.renderHeader()); !strings.Contains(header, "Browser auth:     Brave · isolated profiles") {
+	header := stripANSI(updated.renderHeader())
+	if !strings.Contains(header, "Browser auth") || !strings.Contains(header, "Brave · isolated profiles") {
 		t.Fatalf("header is missing browser status:\n%s", header)
 	}
 
@@ -119,7 +120,7 @@ func TestRenderHeaderIncludesUpdateNotice(t *testing.T) {
 	}
 
 	view := fmt.Sprint(m.View())
-	for _, want := range []string{"Update:", "Update available: v1.3.0"} {
+	for _, want := range []string{"Update", "Update available: v1.3.0"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -153,7 +154,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: authenticated, phase: statusCached},
 			},
-			wantLine: "State:           Cached • last refreshed at 26.08. 16:03",
+			wantLine: "Cached • last refreshed at 26.08. 16:03",
 		},
 		{
 			name:           "stale data is loading",
@@ -163,7 +164,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: authenticated, phase: statusLoading, stale: true},
 			},
-			wantLine: "State:           Loading • last refreshed at 26.08. 16:03",
+			wantLine: "Loading • last refreshed at 26.08. 16:03",
 		},
 		{
 			name:           "first fetch is loading",
@@ -173,7 +174,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {phase: statusLoading},
 			},
-			wantLine: "State:           Loading • last refreshed at never",
+			wantLine: "Loading • last refreshed at never",
 		},
 		{
 			name:           "refresh failed with retained data",
@@ -183,7 +184,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: authenticated, phase: statusFailed, stale: true},
 			},
-			wantLine: "State:           Failed • last refreshed at 26.08. 16:03",
+			wantLine: "Failed • last refreshed at 26.08. 16:03",
 		},
 		{
 			name:           "refresh failed without prior data",
@@ -193,7 +194,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {phase: statusFailed},
 			},
-			wantLine: "State:           Failed • last refreshed at never",
+			wantLine: "Failed • last refreshed at never",
 		},
 		{
 			name:           "credentials rejected",
@@ -203,7 +204,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: signInRequired, phase: statusCached},
 			},
-			wantLine: "State:           Failed • last refreshed at never",
+			wantLine: "Failed • last refreshed at never",
 		},
 		{
 			name:           "different current profile",
@@ -242,8 +243,8 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			}
 			got := stripANSI(m.renderHeader())
 			if test.wantLine == "" {
-				if strings.Contains(got, "State:") {
-					t.Fatalf("header unexpectedly contains a profile state line:\n%s", got)
+				if strings.Contains(got, "last refreshed at") {
+					t.Fatalf("header unexpectedly contains a profile state value:\n%s", got)
 				}
 				return
 			}
@@ -258,8 +259,8 @@ func TestRenderHeaderDoesNotClaimUpToDateBeforeSuccessfulCheck(t *testing.T) {
 	m := appModel{}
 
 	view := fmt.Sprint(m.View())
-	if !strings.Contains(view, "Update:") {
-		t.Fatalf("View() missing update line:\n%s", view)
+	if !strings.Contains(view, "Update") {
+		t.Fatalf("View() missing update field:\n%s", view)
 	}
 	if !strings.Contains(view, "not checked") {
 		t.Fatalf("View() missing neutral unchecked state:\n%s", view)
@@ -1156,55 +1157,55 @@ func TestInputModeResizesAvailableTextWidth(t *testing.T) {
 	m.width = 50
 	m, _ = m.enterInput(actionEditNote, "Edit note:", "old note")
 
-	want := 50 - baseStyle.GetHorizontalFrameSize() - lipgloss.Width(m.textInput.Prompt)
+	want := 50 - baseStyle.GetHorizontalFrameSize() - footerPanelStyle.GetHorizontalFrameSize() - lipgloss.Width(m.textInput.Prompt)
 	if got := m.textInput.Width(); got != want {
 		t.Fatalf("input width = %d, want %d", got, want)
 	}
 
 	updatedModel, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 20})
 	got := updatedModel.(appModel)
-	want = 30 - baseStyle.GetHorizontalFrameSize() - lipgloss.Width(got.textInput.Prompt)
+	want = 30 - baseStyle.GetHorizontalFrameSize() - footerPanelStyle.GetHorizontalFrameSize() - lipgloss.Width(got.textInput.Prompt)
 	if gotWidth := got.textInput.Width(); gotWidth != want {
 		t.Fatalf("resized input width = %d, want %d", gotWidth, want)
 	}
 }
 
-func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
+func TestRenderProfileCardWrapsNoteBelowTitle(t *testing.T) {
 	m := appModel{
 		width: 44,
 		profiles: []profilemgr.ProfileSummary{
-			{Key: "work", Label: "work"},
+			{Key: "work", Label: "work", Note: "this note should wrap onto another line cleanly"},
 		},
 	}
 
-	line := m.renderProfileLine(
-		itemStyle,
-		"  ",
-		"work",
-		"this note should wrap onto another line cleanly",
-		profilemgr.PlanFree,
-		false,
-		m.profileColumnWidth(),
-	)
-
-	parts := strings.Split(line, "\n")
-	if len(parts) < 2 {
-		t.Fatalf("rendered line did not wrap:\n%s", line)
+	card := m.renderProfileCard(0, layoutMini, panelContentWidth(m.width))
+	plain := stripANSI(card)
+	for _, want := range []string{"work", "this note", "wrap onto", "cleanly"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered card missing %q:\n%s", want, plain)
+		}
 	}
-	if !strings.Contains(parts[0], "work") || !strings.Contains(parts[0], "this note") {
-		t.Fatalf("rendered first line missing inline note:\n%s", line)
+	// The note must render fully and wrap across multiple lines.
+	lines := strings.Split(plain, "\n")
+	if len(lines) < 5 {
+		t.Fatalf("note did not wrap onto multiple lines:\n%s", plain)
+	}
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got > 44 {
+			t.Fatalf("card line exceeds terminal width: %d > 44: %q", got, line)
+		}
 	}
 }
 
-func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
+func TestRenderChatGPTCardsAlignNoteColumns(t *testing.T) {
 	firstPercent, secondPercent := 1, 100
 	firstReset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
 	secondReset := time.Date(2026, 9, 2, 1, 2, 0, 0, time.Local)
 	m := appModel{
-		width: 200,
+		width: 140,
 		profiles: []profilemgr.ProfileSummary{
-			{Key: "short", Label: "a@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
-			{Key: "long", Label: "longer@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus},
+			{Key: "short", Label: "a@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree, Note: "first note"},
+			{Key: "long", Label: "longer@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus, Note: "second note"},
 		},
 		profileStatuses: map[string]profileStatusView{
 			"short": {status: &profilemgr.ProfileStatus{FetchedAt: firstReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &firstPercent, ResetsAt: &firstReset}, phase: statusCached},
@@ -1212,18 +1213,26 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 		},
 	}
 
-	columnWidth := m.profileColumnWidth()
-	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
-	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
-	if strings.Count(firstLine, "│") != 2 || strings.Count(secondLine, "│") != 2 {
-		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
+	rendered := stripANSI(m.renderList(panelContentWidth(m.width), 1<<30))
+	var firstNote, secondNote string
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "first note") {
+			firstNote = line
+		}
+		if strings.Contains(line, "second note") {
+			secondNote = line
+		}
 	}
-	if !strings.Contains(firstLine, "99%") || strings.Contains(secondLine, "%") {
-		t.Fatalf("quota percentages are incorrect:\n%s\n%s", firstLine, secondLine)
+	if firstNote == "" || secondNote == "" {
+		t.Fatalf("rendered list missing note columns:\n%s", rendered)
 	}
-	firstState, secondState := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗")
-	if firstState < 0 || secondState < 0 || lipgloss.Width(firstLine[:firstState]) != lipgloss.Width(secondLine[:secondState]) {
-		t.Fatalf("state columns are not aligned: first=%d second=%d\n%s\n%s", lipgloss.Width(firstLine[:firstState]), lipgloss.Width(secondLine[:secondState]), firstLine, secondLine)
+	firstIdx := lipgloss.Width(firstNote[:strings.Index(firstNote, "first note")])
+	secondIdx := lipgloss.Width(secondNote[:strings.Index(secondNote, "second note")])
+	if firstIdx != secondIdx {
+		t.Fatalf("note columns are not aligned: first=%d second=%d\n%s", firstIdx, secondIdx, rendered)
+	}
+	if !strings.Contains(rendered, "5h 99%") || strings.Contains(secondNote, "%") {
+		t.Fatalf("quota lines are incorrect:\n%s", rendered)
 	}
 }
 
@@ -1243,7 +1252,7 @@ func TestRenderChatGPTStatusShowsOnlyAvailableQuotaWindows(t *testing.T) {
 				{WindowDurationMins: 300, RemainingPercent: 99, ResetsAt: fiveHourReset},
 				{WindowDurationMins: 10080, RemainingPercent: 58, ResetsAt: weeklyReset},
 			},
-			want:   []string{"Limits", "5h 99% · 15:30", "Weekly 58%", "02.09. 01:02"},
+			want:   []string{"5h 99% · 15:30", "Weekly 58%", "02.09. 01:02"},
 			absent: []string{"16.08. 15:30"},
 		},
 		{
@@ -1275,7 +1284,7 @@ func TestRenderChatGPTStatusShowsOnlyAvailableQuotaWindows(t *testing.T) {
 					phase:  statusCached,
 				}},
 			}
-			rendered := stripANSI(m.renderList())
+			rendered := stripANSI(m.renderList(panelContentWidth(m.width), 1<<30))
 			for _, want := range test.want {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("rendered list missing %q:\n%s", want, rendered)
@@ -1311,10 +1320,11 @@ func TestRemainingPercentColorGradient(t *testing.T) {
 	}
 }
 
-func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
+func TestRenderCardsAlignNotesInCompactLayout(t *testing.T) {
 	m := appModel{
 		width:             80,
 		cursor:            0,
+		authActive:        true,
 		currentProfileKey: "work",
 		profiles: []profilemgr.ProfileSummary{
 			{Key: "work", Label: "work", Note: "current note", Plan: profilemgr.PlanPro},
@@ -1322,12 +1332,9 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 		},
 	}
 
-	rendered := m.renderList()
-	lines := strings.Split(rendered, "\n")
-
-	var currentLine string
-	var otherLine string
-	for _, line := range lines {
+	rendered := stripANSI(m.renderList(panelContentWidth(m.width), 1<<30))
+	var currentLine, otherLine string
+	for _, line := range strings.Split(rendered, "\n") {
 		if strings.Contains(line, "current note") {
 			currentLine = line
 		}
@@ -1339,21 +1346,10 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 	if currentLine == "" || otherLine == "" {
 		t.Fatalf("rendered list missing expected notes:\n%s", rendered)
 	}
-
-	currentPlain := stripANSI(currentLine)
-	otherPlain := stripANSI(otherLine)
-	currentNoteIdx := strings.Index(currentPlain, "current note")
-	otherNoteIdx := strings.Index(otherPlain, "other note")
-	if currentNoteIdx < 0 || otherNoteIdx < 0 {
-		t.Fatalf("rendered list missing expected note positions:\n%s", rendered)
-	}
-	currentIdx := lipgloss.Width(currentPlain[:currentNoteIdx])
-	otherIdx := lipgloss.Width(otherPlain[:otherNoteIdx])
+	currentIdx := lipgloss.Width(currentLine[:strings.Index(currentLine, "current note")])
+	otherIdx := lipgloss.Width(otherLine[:strings.Index(otherLine, "other note")])
 	if currentIdx != otherIdx {
 		t.Fatalf("notes start at different columns: current=%d other=%d\n%s", currentIdx, otherIdx, rendered)
-	}
-	if strings.Contains(currentPlain, "• current") {
-		t.Fatalf("current row still renders verbose label:\n%s", currentPlain)
 	}
 }
 
@@ -1459,7 +1455,7 @@ func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 }
 
 func TestFooterIncludesCyclePlanHint(t *testing.T) {
-	footer := stripANSI(appModel{mode: modeNormal}.renderFooter())
+	footer := stripANSI(appModel{mode: modeNormal, width: 80}.renderFooter())
 	if !strings.Contains(footer, "p cycle plan") {
 		t.Fatalf("footer missing plan hint: %q", footer)
 	}
@@ -1521,8 +1517,8 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 			"chat": {status: &profilemgr.ProfileStatus{FetchedAt: reset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}, phase: statusCached},
 		},
 	}
-	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"Profile", "Plan", "Limits", "State", "Note", "5h 43% · 15:30", "✓"} {
+	rendered := stripANSI(m.renderList(panelContentWidth(m.width), 1<<30))
+	for _, want := range []string{"Profiles", "Plus", "5h 43% · 15:30", "✓", "chat@example.com", "API"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
 		}
@@ -1567,10 +1563,10 @@ func TestRenderEveryChatGPTStatusState(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			m := appModel{profileStatuses: map[string]profileStatusView{"chat": test.view}}
-			got := m.renderProfileStatus("chat")
+			got := strings.Join(m.profileStatusValues("chat"), " ")
 			for _, want := range test.want {
 				if !strings.Contains(got, want) {
-					t.Fatalf("renderProfileStatus() = %q, want %q", got, want)
+					t.Fatalf("profileStatusValues() = %q, want %q", got, want)
 				}
 			}
 		})
@@ -1802,29 +1798,39 @@ func TestAuthenticationPausesCancelsAndResumesStatusQueue(t *testing.T) {
 	m.cancelStatusFetches()
 }
 
-func TestChatGPTStatusUsesMutedStaleStyleAndFourSpaceContinuation(t *testing.T) {
+func TestChatGPTCardUsesMutedStaleStyleAndIndentedContinuation(t *testing.T) {
 	percent := 57
 	reset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
 	status := &profilemgr.ProfileStatus{FetchedAt: reset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
-	profile := profilemgr.ProfileSummary{Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT, Note: "a custom note"}
-	fresh := appModel{width: 54, profiles: []profilemgr.ProfileSummary{profile}, profileStatuses: map[string]profileStatusView{
+	profile := profilemgr.ProfileSummary{
+		Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT,
+		Note: "a longer custom note that must wrap onto at least one continuation line here",
+	}
+	fresh := appModel{width: 62, profiles: []profilemgr.ProfileSummary{profile}, profileStatuses: map[string]profileStatusView{
 		"chat": {status: status, phase: statusCached},
 	}}
 	stale := fresh
 	stale.profileStatuses = map[string]profileStatusView{"chat": {status: status, phase: statusLoading, stale: true}}
-	freshLine := fresh.renderProfileLineWithStatus(itemStyle, "  ", profile, false, fresh.profileColumnWidth())
-	staleLine := stale.renderProfileLineWithStatus(itemStyle, "  ", profile, false, stale.profileColumnWidth())
-	if freshLine == staleLine {
+	freshCard := fresh.renderProfileCard(0, layoutCompact, panelContentWidth(fresh.width))
+	staleCard := stale.renderProfileCard(0, layoutCompact, panelContentWidth(stale.width))
+	if freshCard == staleCard {
 		t.Fatal("fresh and stale status styling are identical")
 	}
-	parts := strings.Split(stripANSI(staleLine), "\n")
-	if len(parts) < 2 {
-		t.Fatalf("narrow status did not wrap:\n%s", staleLine)
+	plain := stripANSI(staleCard)
+	if !strings.Contains(plain, "continuation") {
+		t.Fatalf("stale card lost part of the wrapped note:\n%s", plain)
 	}
-	for _, continuation := range parts[1:] {
-		if !strings.HasPrefix(continuation, "    ") {
-			t.Fatalf("continuation is not four-space indented: %q", continuation)
+	noteLines := 0
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "longer custom") || strings.Contains(line, "continuation") {
+			noteLines++
+			if !strings.Contains(line, "│   ") {
+				t.Fatalf("note line is not indented inside the card: %q", line)
+			}
 		}
+	}
+	if noteLines < 2 {
+		t.Fatalf("note did not wrap onto continuation lines:\n%s", plain)
 	}
 }
 

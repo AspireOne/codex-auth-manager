@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	profilemgr "codex-manage/internal/profiles"
 )
@@ -22,33 +23,135 @@ const (
 
 const profileStatusTimestampFormat = "02.01. 15:04"
 
+// Responsive layout breakpoints, based on the terminal width. width <= 0
+// means the size is not known yet (before the first WindowSizeMsg); the view
+// then renders in wide layout without any truncation guard.
+type layoutMode int
+
+const (
+	layoutWide layoutMode = iota
+	layoutCompact
+	layoutMini
+)
+
+const (
+	layoutWideMin    = 100
+	layoutCompactMin = 60
+	// fallbackWidth is used for layout decisions when the terminal size is
+	// not known yet (tests, first frame).
+	fallbackWidth = 120
+	// defaultPanelContentW mirrors fallbackWidth for width==0 rendering.
+	defaultPanelContentW = fallbackWidth - 10
+)
+
+func layoutForWidth(width int) layoutMode {
+	if width <= 0 {
+		return layoutWide
+	}
+	switch {
+	case width >= layoutWideMin:
+		return layoutWide
+	case width >= layoutCompactMin:
+		return layoutCompact
+	default:
+		return layoutMini
+	}
+}
+
+// panelContentWidth is the text width available inside the outer panel:
+// baseStyle padding (2+2) and the outer panel border+padding (2+4) are chrome.
+func panelContentWidth(width int) int {
+	if width <= 0 {
+		return defaultPanelContentW
+	}
+	w := width - 10
+	if w < 24 {
+		w = 24
+	}
+	return w
+}
+
 func (m appModel) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
 
+	gridW := panelContentWidth(m.width)
+
 	header := m.renderHeader()
-	list := m.renderList()
-	diagnostics := m.renderDiagnostics()
 	footer := m.renderFooter()
 	status := m.renderStatus()
+	diagnostics := m.renderDiagnostics()
 
-	parts := []string{header, "", list}
+	budget := m.profilesBudget(header, footer, diagnostics)
+	list := m.renderList(gridW, budget)
+
+	// Style Width is the total width including border and padding.
+	panel := outerPanelStyle.Width(gridW + outerPanelStyle.GetHorizontalFrameSize()).Render(header + "\n\n" + list)
+	panel = applyBorderTitle(panel, "Codex Auth Manager")
+
+	parts := []string{panel}
 	if diagnostics != "" {
-		parts = append(parts, "", diagnostics)
+		parts = append(parts, diagnostics)
 	}
-	parts = append(parts, "", footer, "", status)
+	parts = append(parts, footer, status)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return tea.NewView(baseStyle.Render(content))
+	out := baseStyle.Render(content)
+	if m.width > 0 {
+		out = truncateLines(out, m.width)
+	}
+	return tea.NewView(out)
+}
+
+// truncateLines hard-cuts every line to width cells as a final safety net so
+// no line can ever exceed the terminal width.
+func truncateLines(s string, width int) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// applyBorderTitle replaces the plain top border of a rendered bordered block
+// with a `╭─ title ──...──╮` line.
+func applyBorderTitle(block, title string) string {
+	lines := strings.Split(block, "\n")
+	if len(lines) == 0 {
+		return block
+	}
+	width := lipgloss.Width(lines[0])
+	borderStyle := lipgloss.NewStyle().Foreground(panelBorder)
+	// ╭─ (2) + space (1) + title + space (1) + dashes + ╮ (1)
+	dashes := width - lipgloss.Width(title) - 6
+	if dashes < 2 {
+		return block
+	}
+	lines[0] = borderStyle.Render("╭─ ") + headerTitle.Render(title) + borderStyle.Render(" "+strings.Repeat("─", dashes)+"╮")
+	return strings.Join(lines, "\n")
+}
+
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+
+type headerField struct {
+	icon  string
+	label string
+	value string
 }
 
 func (m appModel) renderHeader() string {
+	return m.renderHeaderGrid(panelContentWidth(m.width))
+}
+
+func (m appModel) renderHeaderGrid(gridW int) string {
 	current := "none"
 	if m.authActive {
-		if m.currentProfileKey != "" {
-			current = m.currentAuth.Label
-		} else {
-			current = m.currentAuth.Label
+		current = m.currentAuth.Label
+		if m.currentProfileKey == "" {
 			if current == "" {
 				current = "custom auth"
 			}
@@ -56,43 +159,442 @@ func (m appModel) renderHeader() string {
 		}
 	}
 
-	authState := "logged out"
+	status := footerStyle.Render("logged out")
 	if m.authActive {
-		authState = "active"
+		status = currentTag.Render("active")
 	}
 
-	lines := []string{
-		headerTitle.Render("Codex Auth Manager"),
-		"",
-		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
-		fmt.Sprintf("Profile status:  %s", currentTag.Render(authState)),
+	stateIcon := mutedStatusStyle.Render(icons.unknown)
+	stateValue := mutedStatusStyle.Render("—")
+	if view, ok := m.currentChatGPTStatusView(); ok {
+		state := statusDisplayStateFor(view)
+		lastRefreshed := "never"
+		if refreshedAt, ok := successfulFetchedAt(view); ok {
+			lastRefreshed = refreshedAt.In(time.Local).Format(profileStatusTimestampFormat)
+		}
+		stateIcon = state.style().Render(state.icon())
+		stateValue = footerStyle.Render(fmt.Sprintf("%s • last refreshed at %s", state.label(), lastRefreshed))
 	}
-	if currentStatus := m.renderCurrentStatusLine(); currentStatus != "" {
-		lines = append(lines, currentStatus)
-	}
-	lines = append(lines,
-		m.renderUpdateLine(),
-		fmt.Sprintf("Browser auth:     %s", footerStyle.Render(m.browserAuthStatus)),
-		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileManager.ProfileDir)),
-	)
-	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	return panelStyle.Render(body)
+	updateValue := mutedStatusStyle.Render("not checked")
+	if m.updateChecked {
+		updateValue = footerStyle.Render("up to date")
+		if m.updateNotice != "" {
+			updateValue = infoStyle.Render(m.updateNotice)
+		}
+	}
+
+	fields := []headerField{
+		{mutedStatusStyle.Render(icons.current), "Current profile", headerValue.Render(current)},
+		{mutedStatusStyle.Render(icons.status), "Profile status", status},
+		{stateIcon, "State", stateValue},
+		{mutedStatusStyle.Render(icons.update), "Update", updateValue},
+		{mutedStatusStyle.Render(icons.browser), "Browser auth", footerStyle.Render(m.browserAuthStatus)},
+		{mutedStatusStyle.Render(icons.dir), "Profile dir", mutedStatusStyle.Render(m.profileManager.ProfileDir)},
+	}
+
+	labelW := 0
+	for _, f := range fields {
+		if w := lipgloss.Width(f.icon) + 1 + lipgloss.Width(f.label); w > labelW {
+			labelW = w
+		}
+	}
+
+	chip := func(f headerField, width int) string {
+		valueW := width - labelW - 7
+		if valueW < 4 {
+			valueW = 4
+		}
+		value := f.value
+		if lipgloss.Width(value) > valueW {
+			value = ansi.Truncate(value, valueW, "…")
+		}
+		value += strings.Repeat(" ", valueW-lipgloss.Width(value))
+		bar := separatorStyle.Render("│")
+		label := f.icon + " " + chipLabelStyle.Render(f.label)
+		label += strings.Repeat(" ", labelW-lipgloss.Width(f.icon)-1-lipgloss.Width(f.label))
+		return bar + " " + label + " " + bar + " " + chipValueStyle.Render(value) + " " + bar
+	}
+
+	twoColContentW := 2*(labelW+7+16) + 1
+	var lines []string
+	if gridW >= twoColContentW {
+		cellW := (gridW - 1) / 2
+		fullW := gridW // long-value fields get a full-width row
+		row := func(a, b headerField) string { return chip(a, cellW) + " " + chip(b, cellW) }
+		lines = append(lines,
+			row(fields[0], fields[4]), // current profile | browser auth
+			row(fields[1], fields[3]), // profile status | update
+			chip(fields[2], fullW),    // state
+			chip(fields[5], fullW),    // profile dir
+		)
+	} else {
+		for _, f := range fields {
+			lines = append(lines, chip(f, gridW))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
-func (m appModel) renderCurrentStatusLine() string {
-	view, ok := m.currentChatGPTStatusView()
-	if !ok {
-		return ""
+// ---------------------------------------------------------------------------
+// Profiles section (cards)
+// ---------------------------------------------------------------------------
+
+// renderList renders the "Profiles" divider and the visible window of profile
+// cards fitting into budget rows.
+func (m appModel) renderList(width, budget int) string {
+	divider := renderSectionDivider("Profiles", width)
+	if len(m.profiles) == 0 {
+		return divider + "\n" + emptyStyle.Render("No saved profiles.")
 	}
 
-	state := statusDisplayStateFor(view)
-	lastRefreshed := "never"
-	if refreshedAt, ok := successfulFetchedAt(view); ok {
-		lastRefreshed = refreshedAt.In(time.Local).Format(profileStatusTimestampFormat)
+	layout := layoutForWidth(m.width)
+	cards := make([]string, len(m.profiles))
+	heights := make([]int, len(m.profiles))
+	for i := range m.profiles {
+		cards[i] = m.renderProfileCard(i, layout, width)
+		// + 1 for the blank gap between cards (uniform for window math).
+		heights[i] = lipgloss.Height(cards[i]) + 1
 	}
-	text := fmt.Sprintf("%s • last refreshed at %s", state.label(), lastRefreshed)
-	return fmt.Sprintf("State:           %s", footerStyle.Render(text))
+
+	start, end := visibleCardWindow(heights, m.cursor, budget)
+	var blocks []string
+	if start > 0 {
+		blocks = append(blocks, "  "+scrollIndicatorStyle.Render(fmt.Sprintf("%s %d more", icons.moreUp, start)))
+	}
+	for i := start; i < end; i++ {
+		blocks = append(blocks, cards[i])
+	}
+	if end < len(m.profiles) {
+		blocks = append(blocks, "  "+scrollIndicatorStyle.Render(fmt.Sprintf("%s %d more", icons.moreDown, len(m.profiles)-end)))
+	}
+	return divider + "\n" + strings.Join(blocks, "\n\n")
+}
+
+func renderSectionDivider(title string, width int) string {
+	prefix := "─ " + title + " "
+	dashes := width - lipgloss.Width(prefix)
+	if dashes < 0 {
+		dashes = 0
+	}
+	return dividerStyle.Render("─ ") + sectionTitleStyle.Render(title) + dividerStyle.Render(" "+strings.Repeat("─", dashes))
+}
+
+// visibleCardWindow returns the [start, end) window of cards (heights include
+// inter-card gaps) that fits budget rows while keeping cursor visible.
+func visibleCardWindow(heights []int, cursor, budget int) (int, int) {
+	n := len(heights)
+	if n == 0 {
+		return 0, 0
+	}
+	total := 0
+	for _, h := range heights {
+		total += h
+	}
+	if total <= budget {
+		return 0, n
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= n {
+		cursor = n - 1
+	}
+	start, end := cursor, cursor+1
+	used := heights[cursor]
+	for {
+		// Indicator rows cost one row each side that is clipped.
+		if end < n {
+			need := used + heights[end]
+			if start > 0 {
+				need++
+			}
+			if end+1 < n {
+				need++
+			}
+			if need <= budget {
+				used += heights[end]
+				end++
+				continue
+			}
+		}
+		if start > 0 {
+			need := used + heights[start-1]
+			if start-1 > 0 {
+				need++
+			}
+			if end < n {
+				need++
+			}
+			if need <= budget {
+				start--
+				used += heights[start]
+				continue
+			}
+		}
+		break
+	}
+	return start, end
+}
+
+// profilesBudget is the number of rows available for the cards window.
+func (m appModel) profilesBudget(header, footer, diagnostics string) int {
+	if m.height <= 0 {
+		return 1 << 30
+	}
+	reserved := 2 /* baseStyle vertical padding */ +
+		2 /* outer panel border */ +
+		lipgloss.Height(header) +
+		1 /* blank between header and divider */ +
+		1 /* divider */ +
+		lipgloss.Height(footer) +
+		1 /* status line */
+	if diagnostics != "" {
+		reserved += lipgloss.Height(diagnostics)
+	}
+	budget := m.height - reserved
+	if budget < 3 {
+		budget = 3
+	}
+	return budget
+}
+
+// cardContentWidth is the text width inside a profile card (excluding gutter,
+// card border and card padding).
+func cardContentWidth(panelW int, layout layoutMode) int {
+	w := panelW - 2 /* gutter */ - 2 /* border */ - 2 /* padding */
+	if w < 12 {
+		w = 12
+	}
+	return w
+}
+
+func (m appModel) renderProfileCard(i int, layout layoutMode, panelW int) string {
+	p := m.profiles[i]
+	selected := i == m.cursor
+	inner := cardContentWidth(panelW, layout)
+
+	lines := m.profileCardLines(p, layout, inner)
+
+	style := cardStyle
+	if selected {
+		style = selectedCardStyle
+	}
+	// Width is the total card width: inner content + 2 border + 2 padding.
+	block := style.Width(inner + 4).Render(strings.Join(lines, "\n"))
+
+	rendered := strings.Split(block, "\n")
+	for j := range rendered {
+		gutter := "  "
+		if selected && j == 1 { // mark the first content row, below the top border
+			gutter = headerTitle.Render(icons.cursor) + " "
+		}
+		rendered[j] = gutter + rendered[j]
+	}
+	return strings.Join(rendered, "\n")
+}
+
+// profileCardLines builds the fully padded content lines of a single profile
+// card (without border/gutter).
+func (m appModel) profileCardLines(p profilemgr.ProfileSummary, layout layoutMode, inner int) []string {
+	title := m.renderCardTitle(p, layout, inner)
+	var quotaLines []string
+	var note string
+
+	if p.Kind == profilemgr.AuthKindChatGPT {
+		quotaLines = m.renderQuotaLines(m.statusViewForProfile(p.Key))
+		note = strings.TrimSpace(p.Note)
+	} else {
+		note = strings.TrimSpace(p.Note)
+	}
+
+	// Wide layout: note lives in a right-hand column, wrapped without a cap
+	// so no note text is ever hidden.
+	if layout == layoutWide && note != "" {
+		// Right zone: state icon + " │ " separator + wrapped note.
+		icon := m.renderCardStateIcon(p)
+		sep := separatorStyle.Render(" │ ")
+		rightPrefixW := lipgloss.Width(icon) + lipgloss.Width(sep)
+		noteW := inner/4 + 4
+		if noteW < 12 {
+			noteW = 12
+		}
+		if max := inner - 56; noteW > max && max >= 12 {
+			noteW = max
+		}
+		leftW := inner - rightPrefixW - noteW - 2 // 2 for the gap before the icon
+		var noteLines []string
+		for _, nl := range wrapWords(note, noteW, noteW) {
+			noteLines = append(noteLines, m.renderNoteText(p, nl))
+		}
+		leftLines := []string{truncateCell(padRight(title, leftW), leftW)}
+		for _, q := range quotaLines {
+			leftLines = append(leftLines, "    "+truncateCell(q, leftW-4))
+		}
+		rightLines := make([]string, len(noteLines))
+		for j, nl := range noteLines {
+			if j == 0 {
+				rightLines[j] = icon + sep + nl
+			} else {
+				rightLines[j] = strings.Repeat(" ", rightPrefixW) + nl
+			}
+		}
+		rows := max(len(leftLines), len(rightLines))
+		out := make([]string, 0, rows)
+		for r := 0; r < rows; r++ {
+			var l, rr string
+			if r < len(leftLines) {
+				l = padRight(leftLines[r], leftW)
+			} else {
+				l = strings.Repeat(" ", leftW)
+			}
+			if r < len(rightLines) {
+				rr = rightLines[r]
+			}
+			out = append(out, truncateCell(l+"  "+rr, inner))
+		}
+		return out
+	}
+
+	lines := []string{truncateCell(m.placeCardState(title, p, inner), inner)}
+	indent := ""
+	if layout != layoutMini {
+		indent = "    "
+	}
+	for _, q := range quotaLines {
+		lines = append(lines, indent+truncateCell(q, inner-lipgloss.Width(indent)))
+	}
+	if note != "" {
+		for _, nl := range wrapWords(note, inner-lipgloss.Width(indent), inner-lipgloss.Width(indent)) {
+			lines = append(lines, indent+m.renderNoteText(p, nl))
+		}
+	}
+	return lines
+}
+
+// renderCardTitle renders avatar + label + active dot + plan pill, without the
+// trailing state icon.
+func (m appModel) renderCardTitle(p profilemgr.ProfileSummary, layout layoutMode, inner int) string {
+	var parts []string
+	if layout != layoutMini {
+		parts = append(parts, m.renderAvatar(p))
+	}
+	label := p.Label
+	labelStyle := itemStyle
+	if indexOfProfile(m.profiles, p.Key) == m.cursor {
+		labelStyle = lipgloss.NewStyle().Bold(true)
+	}
+	parts = append(parts, labelStyle.Render(label))
+	if p.Key == m.currentProfileKey && m.authActive {
+		parts = append(parts, currentTag.Render(icons.activeDot))
+	}
+	parts = append(parts, renderPlan(p.Plan))
+	title := strings.Join(parts, " ")
+	if lipgloss.Width(title) > inner {
+		// Truncate the label rather than the pill/state when cramped.
+		// The label is right after the optional avatar part.
+		idx := 0
+		if layout != layoutMini {
+			idx = 1
+		}
+		labelW := lipgloss.Width(label) - (lipgloss.Width(title) - inner)
+		if labelW < 1 {
+			labelW = 1
+		}
+		parts[idx] = labelStyle.Render(ansi.Truncate(label, labelW, "…"))
+		title = strings.Join(parts, " ")
+	}
+	return title
+}
+
+// placeCardState right-aligns the ChatGPT state icon at the end of the title
+// row for layouts without a dedicated note column.
+func (m appModel) placeCardState(title string, p profilemgr.ProfileSummary, inner int) string {
+	icon := m.renderCardStateIcon(p)
+	gap := inner - lipgloss.Width(title) - lipgloss.Width(icon)
+	if gap < 1 {
+		gap = 1
+	}
+	return title + strings.Repeat(" ", gap) + icon
+}
+
+// renderCardStateIcon renders the ✓/?/✗ status icon for ChatGPT profiles and
+// an empty-width string for other kinds.
+func (m appModel) renderCardStateIcon(p profilemgr.ProfileSummary) string {
+	if p.Kind != profilemgr.AuthKindChatGPT {
+		return ""
+	}
+	state := statusDisplayStateFor(m.statusViewForProfile(p.Key))
+	return state.style().Render(state.icon())
+}
+
+func (m appModel) renderAvatar(p profilemgr.ProfileSummary) string {
+	selected := indexOfProfile(m.profiles, p.Key) == m.cursor
+	if p.Kind == profilemgr.AuthKindAPIKey {
+		return avatarAPIStyle.Width(3).Render(icons.apiAvatar)
+	}
+	initial := "?"
+	for _, r := range p.Label {
+		initial = strings.ToUpper(string(r))
+		break
+	}
+	style := avatarStyle
+	if selected {
+		style = avatarSelectedStyle
+	}
+	return style.Width(3).Align(lipgloss.Center).Render(initial)
+}
+
+// renderQuotaLines renders one line per displayable quota, e.g.
+// `5h 90% · 16:03`, heat-colored by remaining percent. Stale data renders
+// faint, matching the previous table behavior.
+func (m appModel) renderQuotaLines(view profileStatusView) []string {
+	if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
+		return nil
+	}
+	quotas := profileQuotas(view.status)
+	lines := make([]string, 0, len(quotas))
+	for _, quota := range quotas {
+		if !displayableProfileQuota(quota) {
+			continue
+		}
+		remaining := max(0, min(100, quota.RemainingPercent))
+		percent := remainingPercentStyle(remaining).Render(fmt.Sprintf("%d%%", remaining))
+		line := fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), percent, profileQuotaReset(quota))
+		if view.stale {
+			line = mutedStatusStyle.Render(fmt.Sprintf("%s %d%% · %s", profileQuotaLabel(quota), remaining, profileQuotaReset(quota)))
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// renderNoteText styles one note line; stale ChatGPT data renders faint.
+// Style after wrapping so ANSI sequences never split across lines.
+func (m appModel) renderNoteText(p profilemgr.ProfileSummary, line string) string {
+	if p.Kind == profilemgr.AuthKindChatGPT && m.profileStatuses[p.Key].stale {
+		return mutedStatusStyle.Render(line)
+	}
+	return footerStyle.Render(line)
+}
+
+// padRight pads s with spaces to width cells.
+func padRight(s string, width int) string {
+	if w := lipgloss.Width(s); w < width {
+		return s + strings.Repeat(" ", width-w)
+	}
+	return s
+}
+
+// truncateCell hard-cuts s to width cells (no ellipsis).
+func truncateCell(s string, width int) string {
+	if width < 1 {
+		width = 1
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "")
 }
 
 func (m appModel) currentChatGPTStatusView() (profileStatusView, bool) {
@@ -152,13 +654,13 @@ func (state statusDisplayState) label() string {
 func (state statusDisplayState) icon() string {
 	switch state {
 	case statusDisplayCached:
-		return "✓"
+		return icons.ok
 	case statusDisplayLoading:
-		return "?"
+		return icons.unknown
 	case statusDisplayFailed:
-		return "✗"
+		return icons.bad
 	default:
-		return "✗"
+		return icons.bad
 	}
 }
 
@@ -172,163 +674,20 @@ func (state statusDisplayState) style() lipgloss.Style {
 	return footerStyle
 }
 
-func (m appModel) renderUpdateLine() string {
-	if !m.updateChecked {
-		return "Update:          not checked"
-	}
-
-	if m.updateNotice == "" {
-		return "Update:          up to date"
-	}
-
-	return fmt.Sprintf("Update:          %s", infoStyle.Render(m.updateNotice))
-}
-
-func (m appModel) renderList() string {
-	if len(m.profiles) == 0 {
-		return emptyStyle.Render("No saved profiles.")
-	}
-
-	profileColumnWidth := m.profileColumnWidth()
-	lines := make([]string, 0, len(m.profiles)+1)
-	lines = append(lines, m.renderProfileTableHeader(profileColumnWidth))
-	for i, p := range m.profiles {
-		prefix := "  "
-		style := itemStyle
-
-		if i == m.cursor {
-			prefix = headerTitle.Render("»") + " "
-			style = selectedItemStyle
-		}
-
-		lines = append(lines, m.renderProfileLineWithStatus(style, prefix, p, p.Key == m.currentProfileKey, profileColumnWidth))
-	}
-
-	return panelStyle.Render(strings.Join(lines, "\n"))
-}
-
-func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
-	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
-	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Limits", "State"}
-	widths := m.profileStatusColumnWidths()
-	for i, heading := range headings {
-		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
-	}
-	return renderProfileColumns(append([]string{base}, append(headings, tableHeaderStyle.Render("Note"))...)...)
-}
-
-func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
-	profile := profilemgr.ProfileSummary{Label: label, Note: note, Plan: plan}
-	return m.renderProfileLineWithStatus(style, prefix, profile, isCurrent, profileColumnWidth)
-}
-
-func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix string, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int) string {
-	marker := " "
-	if isCurrent {
-		marker = currentTag.Render("●")
-	}
-	base := m.renderProfileCell(style, prefix, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlan(profile.Plan)
-	trailing := strings.TrimSpace(profile.Note)
-	if profile.Kind == profilemgr.AuthKindChatGPT {
-		status := renderProfileColumns(m.renderProfileStatusColumns(profile.Key)...)
-		if trailing != "" {
-			trailing = status + profileColumnSeparator.Render(" │ ") + trailing
-		} else {
-			trailing = status
-		}
-	}
-	if trailing == "" {
-		return base
-	}
-
-	separator := profileColumnSeparator.Render(" │ ")
-	noteStyle := footerStyle
-	if profile.Kind == profilemgr.AuthKindChatGPT {
-		noteStyle = lipgloss.NewStyle()
-		if m.profileStatuses[profile.Key].stale {
-			noteStyle = mutedStatusStyle
-		}
-	}
-	continuationIndent := "    "
-	availableWidth := m.listContentWidth()
-	if availableWidth <= 0 {
-		return base + noteStyle.Render(separator+trailing)
-	}
-	if lipgloss.Width(base)+lipgloss.Width(separator)+lipgloss.Width(trailing) <= availableWidth {
-		return base + noteStyle.Render(separator+trailing)
-	}
-
-	firstLineWidth := availableWidth - lipgloss.Width(base) - lipgloss.Width(separator)
-	if firstLineWidth < 12 {
-		firstLineWidth = 12
-	}
-	continuationWidth := availableWidth - lipgloss.Width(continuationIndent)
-	if continuationWidth < 12 {
-		continuationWidth = 12
-	}
-
-	wrapped := wrapWords(trailing, firstLineWidth, continuationWidth)
-	if len(wrapped) == 0 {
-		return base
-	}
-
-	line := base + noteStyle.Render(separator+wrapped[0])
-	for _, part := range wrapped[1:] {
-		line += "\n" + noteStyle.Render(continuationIndent+part)
-	}
-	return line
-}
-
-func (m appModel) renderProfileStatus(key string) string {
-	return renderProfileColumns(m.profileStatusValues(key)...)
-}
-
+// profileStatusValues returns the quota summary and styled state icon for a
+// profile key.
 func (m appModel) profileStatusValues(key string) []string {
 	view := m.statusViewForProfile(key)
 	limits := "-"
 	if view.status != nil && view.status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
 		limits = formatProfileQuotas(profileQuotas(view.status))
 	}
-	return []string{limits, statusDisplayStateFor(view).icon()}
+	state := statusDisplayStateFor(view)
+	return []string{limits, state.style().Render(state.icon())}
 }
 
 func remainingPercent(used int) int {
 	return max(0, min(100, 100-used))
-}
-
-func (m appModel) renderProfileStatusColumns(key string) []string {
-	state := statusDisplayStateFor(m.statusViewForProfile(key))
-	values := m.profileStatusValues(key)
-	widths := m.profileStatusColumnWidths()
-	limitValue := values[0]
-	values[0] = m.renderProfileQuotaCell(key) + strings.Repeat(" ", widths[0]-lipgloss.Width(limitValue))
-	values[1] = state.style().Render(values[1]) + strings.Repeat(" ", widths[1]-lipgloss.Width(values[1]))
-	return values
-}
-
-func (m appModel) renderProfileQuotaCell(key string) string {
-	view := m.statusViewForProfile(key)
-	if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
-		return m.profileStatusValues(key)[0]
-	}
-	quotas := profileQuotas(view.status)
-	if len(quotas) == 0 {
-		return "-"
-	}
-	parts := make([]string, 0, len(quotas))
-	for _, quota := range quotas {
-		if !displayableProfileQuota(quota) {
-			continue
-		}
-		remaining := max(0, min(100, quota.RemainingPercent))
-		percent := remainingPercentStyle(remaining).Render(fmt.Sprintf("%d%%", remaining))
-		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), percent, profileQuotaReset(quota)))
-	}
-	if len(parts) == 0 {
-		return "-"
-	}
-	return strings.Join(parts, "  ")
 }
 
 func remainingPercentStyle(percent int) lipgloss.Style {
@@ -413,33 +772,7 @@ func profileQuotaLabel(quota profilemgr.ProfileQuota) string {
 	return fmt.Sprintf("%dm", quota.WindowDurationMins)
 }
 
-func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Limits", "State"}
-	widths := make([]int, len(headings))
-	for i, heading := range headings {
-		widths[i] = lipgloss.Width(heading)
-	}
-	for _, p := range m.profiles {
-		if p.Kind != profilemgr.AuthKindChatGPT {
-			continue
-		}
-		for i, value := range m.profileStatusValues(p.Key) {
-			widths[i] = max(widths[i], lipgloss.Width(value))
-		}
-	}
-	for i, value := range m.profileStatusValues("") {
-		widths[i] = max(widths[i], lipgloss.Width(value))
-	}
-	return widths
-}
-
-func renderProfileColumns(columns ...string) string {
-	return strings.Join(columns, profileColumnSeparator.Render(" │ "))
-}
-
 func renderPlan(plan profilemgr.Plan) string {
-	const planColumnWidth = 4
-
 	label := plan.Label()
 	style := freePlanStyle
 	switch plan {
@@ -452,45 +785,7 @@ func renderPlan(plan profilemgr.Plan) string {
 	case profilemgr.PlanAPI:
 		style = apiPlanStyle
 	}
-	return style.Render(label) + strings.Repeat(" ", planColumnWidth-lipgloss.Width(label))
-}
-
-func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, profileColumnWidth int) string {
-	paddingWidth := profileColumnWidth - lipgloss.Width(prefix+label)
-	if paddingWidth < 0 {
-		paddingWidth = 0
-	}
-
-	return style.Render(prefix+label) + strings.Repeat(" ", paddingWidth)
-}
-
-func (m appModel) profileColumnWidth() int {
-	width := 0
-	for i, p := range m.profiles {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "» "
-		}
-
-		lineWidth := lipgloss.Width(prefix + p.Label)
-		if lineWidth > width {
-			width = lineWidth
-		}
-	}
-	return width
-}
-
-func (m appModel) listContentWidth() int {
-	if m.width <= 0 {
-		return 0
-	}
-
-	const horizontalChrome = 10
-	width := m.width - horizontalChrome
-	if width < 20 {
-		return 20
-	}
-	return width
+	return style.Render(label)
 }
 
 func wrapWords(text string, firstLineWidth, continuationWidth int) []string {
@@ -518,7 +813,17 @@ func wrapWords(text string, firstLineWidth, continuationWidth int) []string {
 	return lines
 }
 
+// ---------------------------------------------------------------------------
+// Footer, diagnostics, status
+// ---------------------------------------------------------------------------
+
 func (m appModel) renderFooter() string {
+	gridW := panelContentWidth(m.width)
+	// Width is total (border 2 + padding 2): content width is gridW + 2.
+	return footerPanelStyle.Width(gridW + 6).Render(m.renderFooterContent(gridW + 2))
+}
+
+func (m appModel) renderFooterContent(width int) string {
 	switch m.mode {
 	case modeInput:
 		return m.textInput.View()
@@ -549,12 +854,34 @@ func (m appModel) renderFooter() string {
 			formatKeyHint("q", "quit"),
 		}
 
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			footerStyle.Render("UI: "+strings.Join(navigationCommands, " • ")),
-			footerStyle.Render("Manage: "+strings.Join(profileCommands, " • ")),
-			footerStyle.Render("Global: "+strings.Join(globalCommands, " • ")),
-		)
+		uiLine := footerStyle.Render("UI: " + strings.Join(navigationCommands, " • "))
+		manageLine := footerStyle.Render("Manage: " + strings.Join(profileCommands, " • "))
+		globalLine := footerStyle.Render("Global: " + strings.Join(globalCommands, " • "))
+
+		if m.width > 0 {
+			gap := width - lipgloss.Width(uiLine) - lipgloss.Width(globalLine)
+			if gap >= 4 {
+				return uiLine + strings.Repeat(" ", gap) + globalLine + "\n" + manageLine
+			}
+		}
+		// Mini terminals: wrap hint lines instead of dropping keybinds.
+		// Styling falls back to plain footer text on wrapped lines.
+		plain := []string{
+			"UI: " + strings.Join(navigationCommands, " • "),
+			"Manage: " + strings.Join(profileCommands, " • "),
+			"Global: " + strings.Join(globalCommands, " • "),
+		}
+		var lines []string
+		for i, line := range plain {
+			if m.width > 0 && lipgloss.Width(line) > width-2 {
+				for _, w := range wrapWords(line, width-2, width-2) {
+					lines = append(lines, footerStyle.Render(w))
+				}
+			} else {
+				lines = append(lines, []string{uiLine, manageLine, globalLine}[i])
+			}
+		}
+		return strings.Join(lines, "\n")
 	default:
 		return ""
 	}
@@ -576,18 +903,23 @@ func (m appModel) renderDiagnostics() string {
 		lines = append(lines, fmt.Sprintf("%s %s", headerValue.Render(issue.Name), footerStyle.Render(issue.Reason)))
 	}
 
-	return panelStyle.Render(strings.Join(lines, "\n"))
+	return panelStyle.Width(panelContentWidth(m.width) + panelStyle.GetHorizontalFrameSize()).Render(strings.Join(lines, "\n"))
 }
 
 func (m appModel) renderStatus() string {
 	if m.errText != "" {
-		return errorStyle.Render("Error: " + m.errText)
+		return errorStyle.Render(icons.bad + " Error: " + m.errText)
+	}
+	if m.status == "" {
+		return ""
 	}
 	style := statusStyle
+	icon := icons.ok + " "
 	if m.statusKind == statusInfo {
 		style = infoStyle
+		icon = icons.cursor + " "
 	}
-	s := style.Render(m.status)
+	s := style.Render(icon + m.status)
 	if m.restartRequired {
 		s += lipgloss.NewStyle().Foreground(mutedColor).Render(" (Restart Codex to apply)")
 	}

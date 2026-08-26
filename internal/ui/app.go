@@ -413,7 +413,7 @@ func (m *appModel) resizeInput() {
 		return
 	}
 
-	width := m.width - baseStyle.GetHorizontalFrameSize() - lipgloss.Width(m.textInput.Prompt)
+	width := m.width - baseStyle.GetHorizontalFrameSize() - footerPanelStyle.GetHorizontalFrameSize() - lipgloss.Width(m.textInput.Prompt)
 	m.textInput.SetWidth(max(1, width))
 }
 
