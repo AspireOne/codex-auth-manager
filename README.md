@@ -186,6 +186,10 @@ Brave, Chromium, Chrome, and Edge are supported. If needed, choose the browser o
 
 The profile list shows each ChatGPT account's available quota windows
 (5-hour, weekly, and optional monthly), remaining percentage, reset time,
-and sign-in status at a glance. Usage details are refreshed automatically and
-reused briefly, keeping profile switching fast; windows that Codex does not
-return are omitted.
+and combined fetch state at a glance. The state shows a question mark while
+loading, a check mark for usable fetched or cached data, and a cross when
+fetching or authentication fails. The active profile header also shows
+`Cached`, `Loading`, or `Failed` together with the last successful refresh
+time; it shows `never` until a successful refresh exists. Usage details are
+refreshed automatically and reused briefly, keeping profile switching fast;
+windows that Codex does not return are omitted.

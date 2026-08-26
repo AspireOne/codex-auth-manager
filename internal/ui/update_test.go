@@ -126,6 +126,134 @@ func TestRenderHeaderIncludesUpdateNotice(t *testing.T) {
 	}
 }
 
+func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
+	fetchedAt := time.Date(2026, 8, 26, 16, 3, 0, 0, time.Local)
+	authenticated := &profilemgr.ProfileStatus{
+		FetchedAt:  fetchedAt,
+		AuthStatus: profilemgr.ProfileAuthAuthenticated,
+	}
+	signInRequired := &profilemgr.ProfileStatus{
+		FetchedAt:  fetchedAt,
+		AuthStatus: profilemgr.ProfileAuthSignInRequired,
+	}
+	chatProfile := profilemgr.ProfileSummary{Key: "chat", Kind: profilemgr.AuthKindChatGPT}
+	tests := []struct {
+		name            string
+		authActive      bool
+		currentProfile  string
+		profiles        []profilemgr.ProfileSummary
+		profileStatuses map[string]profileStatusView
+		wantLine        string
+	}{
+		{
+			name:           "fresh cached data",
+			authActive:     true,
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {status: authenticated, phase: statusCached},
+			},
+			wantLine: "State:           Cached • last refreshed at 26.08. 16:03",
+		},
+		{
+			name:           "stale data is loading",
+			authActive:     true,
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {status: authenticated, phase: statusLoading, stale: true},
+			},
+			wantLine: "State:           Loading • last refreshed at 26.08. 16:03",
+		},
+		{
+			name:           "first fetch is loading",
+			authActive:     true,
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {phase: statusLoading},
+			},
+			wantLine: "State:           Loading • last refreshed at never",
+		},
+		{
+			name:           "refresh failed with retained data",
+			authActive:     true,
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {status: authenticated, phase: statusFailed, stale: true},
+			},
+			wantLine: "State:           Failed • last refreshed at 26.08. 16:03",
+		},
+		{
+			name:           "refresh failed without prior data",
+			authActive:     true,
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {phase: statusFailed},
+			},
+			wantLine: "State:           Failed • last refreshed at never",
+		},
+		{
+			name:           "credentials rejected",
+			authActive:     true,
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {status: signInRequired, phase: statusCached},
+			},
+			wantLine: "State:           Failed • last refreshed at never",
+		},
+		{
+			name:           "different current profile",
+			authActive:     true,
+			currentProfile: "other",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {status: authenticated, phase: statusFailed, stale: true},
+			},
+		},
+		{
+			name:           "API-key profile",
+			authActive:     true,
+			currentProfile: "api",
+			profiles: []profilemgr.ProfileSummary{{
+				Key: "api", Kind: profilemgr.AuthKindAPIKey,
+			}},
+		},
+		{
+			name:           "logged out",
+			currentProfile: "chat",
+			profiles:       []profilemgr.ProfileSummary{chatProfile},
+			profileStatuses: map[string]profileStatusView{
+				"chat": {status: authenticated, phase: statusCached},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := appModel{
+				authActive:        test.authActive,
+				currentProfileKey: test.currentProfile,
+				profiles:          test.profiles,
+				profileStatuses:   test.profileStatuses,
+			}
+			got := stripANSI(m.renderHeader())
+			if test.wantLine == "" {
+				if strings.Contains(got, "State:") {
+					t.Fatalf("header unexpectedly contains a profile state line:\n%s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, test.wantLine) {
+				t.Fatalf("header missing %q:\n%s", test.wantLine, got)
+			}
+		})
+	}
+}
+
 func TestRenderHeaderDoesNotClaimUpToDateBeforeSuccessfulCheck(t *testing.T) {
 	m := appModel{}
 
@@ -1079,7 +1207,7 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 			{Key: "long", Label: "longer@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus},
 		},
 		profileStatuses: map[string]profileStatusView{
-			"short": {status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &firstPercent, ResetsAt: &firstReset}, phase: statusCached},
+			"short": {status: &profilemgr.ProfileStatus{FetchedAt: firstReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &firstPercent, ResetsAt: &firstReset}, phase: statusCached},
 			"long":  {status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthSignInRequired, UsedPercent: &secondPercent, ResetsAt: &secondReset}, phase: statusCached},
 		},
 	}
@@ -1087,15 +1215,15 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 	columnWidth := m.profileColumnWidth()
 	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
 	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
-	if strings.Count(firstLine, "│") != 3 || strings.Count(secondLine, "│") != 3 {
+	if strings.Count(firstLine, "│") != 2 || strings.Count(secondLine, "│") != 2 {
 		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
 	}
 	if !strings.Contains(firstLine, "99%") || strings.Contains(secondLine, "%") {
 		t.Fatalf("quota percentages are incorrect:\n%s\n%s", firstLine, secondLine)
 	}
-	firstAuth, secondAuth := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗")
-	if firstAuth < 0 || secondAuth < 0 || lipgloss.Width(firstLine[:firstAuth]) != lipgloss.Width(secondLine[:secondAuth]) {
-		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", lipgloss.Width(firstLine[:firstAuth]), lipgloss.Width(secondLine[:secondAuth]), firstLine, secondLine)
+	firstState, secondState := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗")
+	if firstState < 0 || secondState < 0 || lipgloss.Width(firstLine[:firstState]) != lipgloss.Width(secondLine[:secondState]) {
+		t.Fatalf("state columns are not aligned: first=%d second=%d\n%s\n%s", lipgloss.Width(firstLine[:firstState]), lipgloss.Width(secondLine[:secondState]), firstLine, secondLine)
 	}
 }
 
@@ -1143,7 +1271,7 @@ func TestRenderChatGPTStatusShowsOnlyAvailableQuotaWindows(t *testing.T) {
 				width:    200,
 				profiles: []profilemgr.ProfileSummary{{Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus}},
 				profileStatuses: map[string]profileStatusView{"chat": {
-					status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: test.quotas},
+					status: &profilemgr.ProfileStatus{FetchedAt: fiveHourReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: test.quotas},
 					phase:  statusCached,
 				}},
 			}
@@ -1390,13 +1518,18 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 			{Key: "api", Label: "API", Kind: profilemgr.AuthKindAPIKey, Plan: profilemgr.PlanFree},
 		},
 		profileStatuses: map[string]profileStatusView{
-			"chat": {status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}, phase: statusCached},
+			"chat": {status: &profilemgr.ProfileStatus{FetchedAt: reset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}, phase: statusCached},
 		},
 	}
 	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"Profile", "Plan", "Limits", "Auth", "Cache", "Note", "5h 43% · 15:30", "✓", "Cached"} {
+	for _, want := range []string{"Profile", "Plan", "Limits", "State", "Note", "5h 43% · 15:30", "✓"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, oldHeading := range []string{"Auth", "Data", "Cache", "Cached"} {
+		if strings.Contains(rendered, oldHeading) {
+			t.Fatalf("rendered list still contains removed status heading/text %q:\n%s", oldHeading, rendered)
 		}
 	}
 	apiLine := ""
@@ -1413,19 +1546,23 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 func TestRenderEveryChatGPTStatusState(t *testing.T) {
 	percent := 57
 	reset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
-	cached := &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
+	cached := &profilemgr.ProfileStatus{FetchedAt: reset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
 	signIn := &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthSignInRequired}
 	tests := []struct {
 		name string
 		view profileStatusView
 		want []string
 	}{
-		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"43%", "✓", "Cached"}},
-		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"43%", "✓", "Loading"}},
-		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-", "?", "Loading"}},
-		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-", "✗", "Cached"}},
-		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"43%", "✓", "Cached · failed"}},
-		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-", "?", "Unavailable · failed"}},
+		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"43%", "✓"}},
+		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"43%", "?"}},
+		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-", "?"}},
+		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-", "✗"}},
+		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"43%", "✗"}},
+		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-", "✗"}},
+		{name: "cached phase without status", view: profileStatusView{phase: statusCached}, want: []string{"-", "✗"}},
+		{name: "cached phase without refresh timestamp", view: profileStatusView{
+			status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated}, phase: statusCached,
+		}, want: []string{"-", "✗"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1668,7 +1805,7 @@ func TestAuthenticationPausesCancelsAndResumesStatusQueue(t *testing.T) {
 func TestChatGPTStatusUsesMutedStaleStyleAndFourSpaceContinuation(t *testing.T) {
 	percent := 57
 	reset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
-	status := &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
+	status := &profilemgr.ProfileStatus{FetchedAt: reset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
 	profile := profilemgr.ProfileSummary{Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT, Note: "a custom note"}
 	fresh := appModel{width: 54, profiles: []profilemgr.ProfileSummary{profile}, profileStatuses: map[string]profileStatusView{
 		"chat": {status: status, phase: statusCached},

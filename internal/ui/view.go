@@ -12,6 +12,16 @@ import (
 	profilemgr "codex-manage/internal/profiles"
 )
 
+type statusDisplayState int
+
+const (
+	statusDisplayCached statusDisplayState = iota
+	statusDisplayLoading
+	statusDisplayFailed
+)
+
+const profileStatusTimestampFormat = "02.01. 15:04"
+
 func (m appModel) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
@@ -51,18 +61,115 @@ func (m appModel) renderHeader() string {
 		authState = "active"
 	}
 
-	body := lipgloss.JoinVertical(
-		lipgloss.Left,
+	lines := []string{
 		headerTitle.Render("Codex Auth Manager"),
 		"",
 		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
 		fmt.Sprintf("Profile status:  %s", currentTag.Render(authState)),
+	}
+	if currentStatus := m.renderCurrentStatusLine(); currentStatus != "" {
+		lines = append(lines, currentStatus)
+	}
+	lines = append(lines,
 		m.renderUpdateLine(),
 		fmt.Sprintf("Browser auth:     %s", footerStyle.Render(m.browserAuthStatus)),
 		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileManager.ProfileDir)),
 	)
+	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
 	return panelStyle.Render(body)
+}
+
+func (m appModel) renderCurrentStatusLine() string {
+	view, ok := m.currentChatGPTStatusView()
+	if !ok {
+		return ""
+	}
+
+	state := statusDisplayStateFor(view)
+	lastRefreshed := "never"
+	if refreshedAt, ok := successfulFetchedAt(view); ok {
+		lastRefreshed = refreshedAt.In(time.Local).Format(profileStatusTimestampFormat)
+	}
+	text := fmt.Sprintf("%s • last refreshed at %s", state.label(), lastRefreshed)
+	return fmt.Sprintf("State:           %s", footerStyle.Render(text))
+}
+
+func (m appModel) currentChatGPTStatusView() (profileStatusView, bool) {
+	if !m.authActive || m.currentProfileKey == "" {
+		return profileStatusView{}, false
+	}
+	index := indexOfProfile(m.profiles, m.currentProfileKey)
+	if index < 0 || m.profiles[index].Kind != profilemgr.AuthKindChatGPT {
+		return profileStatusView{}, false
+	}
+	return m.statusViewForProfile(m.currentProfileKey), true
+}
+
+func (m appModel) statusViewForProfile(key string) profileStatusView {
+	if view, ok := m.profileStatuses[key]; ok {
+		return view
+	}
+	return profileStatusView{phase: statusLoading}
+}
+
+func successfulFetchedAt(view profileStatusView) (time.Time, bool) {
+	if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated || view.status.FetchedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return view.status.FetchedAt, true
+}
+
+func statusDisplayStateFor(view profileStatusView) statusDisplayState {
+	switch view.phase {
+	case statusLoading:
+		return statusDisplayLoading
+	case statusFailed:
+		return statusDisplayFailed
+	case statusCached:
+		if _, ok := successfulFetchedAt(view); !ok {
+			return statusDisplayFailed
+		}
+		return statusDisplayCached
+	default:
+		return statusDisplayFailed
+	}
+}
+
+func (state statusDisplayState) label() string {
+	switch state {
+	case statusDisplayCached:
+		return "Cached"
+	case statusDisplayLoading:
+		return "Loading"
+	case statusDisplayFailed:
+		return "Failed"
+	default:
+		return "Failed"
+	}
+}
+
+func (state statusDisplayState) icon() string {
+	switch state {
+	case statusDisplayCached:
+		return "✓"
+	case statusDisplayLoading:
+		return "?"
+	case statusDisplayFailed:
+		return "✗"
+	default:
+		return "✗"
+	}
+}
+
+func (state statusDisplayState) style() lipgloss.Style {
+	if state == statusDisplayCached {
+		return currentTag
+	}
+	if state == statusDisplayFailed {
+		return errorStyle
+	}
+	return footerStyle
 }
 
 func (m appModel) renderUpdateLine() string {
@@ -103,7 +210,7 @@ func (m appModel) renderList() string {
 func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
 	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Limits", "Auth", "Data"}
+	headings := []string{"Limits", "State"}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
 		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
@@ -178,37 +285,12 @@ func (m appModel) renderProfileStatus(key string) string {
 }
 
 func (m appModel) profileStatusValues(key string) []string {
-	view, ok := m.profileStatuses[key]
-	if !ok {
-		view = profileStatusView{phase: statusLoading}
-	}
+	view := m.statusViewForProfile(key)
 	limits := "-"
-	auth := "?"
-	if view.status != nil {
-		if view.status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
-			limits = formatProfileQuotas(profileQuotas(view.status))
-		}
-		switch view.status.AuthStatus {
-		case profilemgr.ProfileAuthAuthenticated:
-			auth = "✓"
-		case profilemgr.ProfileAuthSignInRequired:
-			auth = "✗"
-		}
+	if view.status != nil && view.status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
+		limits = formatProfileQuotas(profileQuotas(view.status))
 	}
-	cache := "Loading"
-	switch view.phase {
-	case statusLoading:
-		cache = "Loading"
-	case statusCached:
-		cache = "Cached"
-	case statusFailed:
-		if view.status != nil {
-			cache = "Cached · failed"
-		} else {
-			cache = "Unavailable · failed"
-		}
-	}
-	return []string{limits, auth, cache}
+	return []string{limits, statusDisplayStateFor(view).icon()}
 }
 
 func remainingPercent(used int) int {
@@ -216,18 +298,18 @@ func remainingPercent(used int) int {
 }
 
 func (m appModel) renderProfileStatusColumns(key string) []string {
+	state := statusDisplayStateFor(m.statusViewForProfile(key))
 	values := m.profileStatusValues(key)
 	widths := m.profileStatusColumnWidths()
 	limitValue := values[0]
 	values[0] = m.renderProfileQuotaCell(key) + strings.Repeat(" ", widths[0]-lipgloss.Width(limitValue))
-	values[1] = m.profileAuthIndicatorStyle(key).Render(values[1]) + strings.Repeat(" ", widths[1]-lipgloss.Width(values[1]))
-	values[2] += strings.Repeat(" ", widths[2]-lipgloss.Width(values[2]))
+	values[1] = state.style().Render(values[1]) + strings.Repeat(" ", widths[1]-lipgloss.Width(values[1]))
 	return values
 }
 
 func (m appModel) renderProfileQuotaCell(key string) string {
-	view, ok := m.profileStatuses[key]
-	if !ok || view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
+	view := m.statusViewForProfile(key)
+	if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
 		return m.profileStatusValues(key)[0]
 	}
 	quotas := profileQuotas(view.status)
@@ -297,7 +379,7 @@ func displayableProfileQuota(quota profilemgr.ProfileQuota) bool {
 }
 
 func profileQuotaReset(quota profilemgr.ProfileQuota) string {
-	format := "02.01. 15:04"
+	format := profileStatusTimestampFormat
 	if !quota.Monthly && quota.WindowDurationMins == 300 {
 		format = "15:04"
 	}
@@ -331,23 +413,8 @@ func profileQuotaLabel(quota profilemgr.ProfileQuota) string {
 	return fmt.Sprintf("%dm", quota.WindowDurationMins)
 }
 
-func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {
-	view, ok := m.profileStatuses[key]
-	if !ok || view.status == nil {
-		return footerStyle
-	}
-	switch view.status.AuthStatus {
-	case profilemgr.ProfileAuthAuthenticated:
-		return currentTag
-	case profilemgr.ProfileAuthSignInRequired:
-		return errorStyle
-	default:
-		return footerStyle
-	}
-}
-
 func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Limits", "Auth", "Data"}
+	headings := []string{"Limits", "State"}
 	widths := make([]int, len(headings))
 	for i, heading := range headings {
 		widths[i] = lipgloss.Width(heading)
