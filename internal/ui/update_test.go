@@ -86,8 +86,8 @@ func TestSkippedUpdateCheckStaysNeutral(t *testing.T) {
 	}
 
 	view := fmt.Sprint(got.View())
-	if !strings.Contains(view, "not checked") {
-		t.Fatalf("View() missing neutral unchecked state after skipped check:\n%s", view)
+	if strings.Contains(view, "Update") {
+		t.Fatalf("View() shows an update notice after skipped check:\n%s", view)
 	}
 	if strings.Contains(view, "up to date") {
 		t.Fatalf("View() incorrectly claims up to date after skipped check:\n%s", view)
@@ -101,7 +101,7 @@ func TestBrowserStatusMessageDescribesBrowserOrUnavailable(t *testing.T) {
 	if updated.browserAuthStatus != "Brave · isolated profiles" {
 		t.Fatalf("browserAuthStatus = %q", updated.browserAuthStatus)
 	}
-	if header := stripANSI(updated.renderHeader()); !strings.Contains(header, "Browser auth:     Brave · isolated profiles") {
+	if header := stripANSI(updated.renderHeader(0)); !strings.Contains(header, "Browser    Brave · isolated profiles") {
 		t.Fatalf("header is missing browser status:\n%s", header)
 	}
 
@@ -112,17 +112,20 @@ func TestBrowserStatusMessageDescribesBrowserOrUnavailable(t *testing.T) {
 	}
 }
 
-func TestRenderHeaderIncludesUpdateNotice(t *testing.T) {
+func TestTitleIncludesUpdateNotice(t *testing.T) {
 	m := appModel{
 		updateChecked: true,
 		updateNotice:  "Update available: v1.3.0",
 	}
 
 	view := fmt.Sprint(m.View())
-	for _, want := range []string{"Update:", "Update available: v1.3.0"} {
+	for _, want := range []string{"Update available: v1.3.0"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
+	}
+	if !strings.Contains(view, "Codex Auth Manager") {
+		t.Fatalf("View() missing title:\n%s", view)
 	}
 }
 
@@ -153,7 +156,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: authenticated, phase: statusCached},
 			},
-			wantLine: "State:           Cached • last refreshed at 26.08. 16:03",
+			wantLine: "State      Cached · refreshed 26.08. 16:03",
 		},
 		{
 			name:           "stale data is loading",
@@ -163,7 +166,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: authenticated, phase: statusLoading, stale: true},
 			},
-			wantLine: "State:           Loading • last refreshed at 26.08. 16:03",
+			wantLine: "State      Loading · refreshed 26.08. 16:03",
 		},
 		{
 			name:           "first fetch is loading",
@@ -173,7 +176,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {phase: statusLoading},
 			},
-			wantLine: "State:           Loading • last refreshed at never",
+			wantLine: "State      Loading",
 		},
 		{
 			name:           "refresh failed with retained data",
@@ -183,7 +186,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: authenticated, phase: statusFailed, stale: true},
 			},
-			wantLine: "State:           Failed • last refreshed at 26.08. 16:03",
+			wantLine: "State      Failed · refreshed 26.08. 16:03",
 		},
 		{
 			name:           "refresh failed without prior data",
@@ -193,7 +196,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {phase: statusFailed},
 			},
-			wantLine: "State:           Failed • last refreshed at never",
+			wantLine: "State      Failed",
 		},
 		{
 			name:           "credentials rejected",
@@ -203,7 +206,7 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 			profileStatuses: map[string]profileStatusView{
 				"chat": {status: signInRequired, phase: statusCached},
 			},
-			wantLine: "State:           Failed • last refreshed at never",
+			wantLine: "State      Failed",
 		},
 		{
 			name:           "different current profile",
@@ -240,10 +243,10 @@ func TestRenderHeaderShowsCurrentStatusAndLastRefresh(t *testing.T) {
 				profiles:          test.profiles,
 				profileStatuses:   test.profileStatuses,
 			}
-			got := stripANSI(m.renderHeader())
+			got := stripANSI(m.renderHeader(0))
 			if test.wantLine == "" {
-				if strings.Contains(got, "State:") {
-					t.Fatalf("header unexpectedly contains a profile state line:\n%s", got)
+				if strings.Contains(got, "refreshed") {
+					t.Fatalf("header unexpectedly contains a profile refresh state:\n%s", got)
 				}
 				return
 			}
@@ -258,18 +261,12 @@ func TestRenderHeaderDoesNotClaimUpToDateBeforeSuccessfulCheck(t *testing.T) {
 	m := appModel{}
 
 	view := fmt.Sprint(m.View())
-	if !strings.Contains(view, "Update:") {
-		t.Fatalf("View() missing update line:\n%s", view)
-	}
-	if !strings.Contains(view, "not checked") {
-		t.Fatalf("View() missing neutral unchecked state:\n%s", view)
-	}
-	if strings.Contains(view, "up to date") {
-		t.Fatalf("View() incorrectly claims up to date before a successful check:\n%s", view)
+	if strings.Contains(view, "Update") {
+		t.Fatalf("View() shows an update notice before a successful check:\n%s", view)
 	}
 }
 
-func TestSuccessfulUpdateCheckWithoutUpdateRendersUpToDate(t *testing.T) {
+func TestSuccessfulUpdateCheckWithoutUpdateShowsNoNotice(t *testing.T) {
 	m := appModel{}
 
 	updatedModel, _ := m.Update(updateCheckMsg{
@@ -290,8 +287,8 @@ func TestSuccessfulUpdateCheckWithoutUpdateRendersUpToDate(t *testing.T) {
 	}
 
 	view := fmt.Sprint(got.View())
-	if !strings.Contains(view, "up to date") {
-		t.Fatalf("View() missing up-to-date state after successful check:\n%s", view)
+	if strings.Contains(view, "Update") {
+		t.Fatalf("View() shows an update notice when up to date:\n%s", view)
 	}
 }
 
@@ -322,9 +319,6 @@ func TestSuccessfulNoUpdateClearsStaleNotice(t *testing.T) {
 	if strings.Contains(view, "Update available: v1.3.0") {
 		t.Fatalf("View() still shows stale notice:\n%s", view)
 	}
-	if !strings.Contains(view, "up to date") {
-		t.Fatalf("View() missing up-to-date state after clearing stale notice:\n%s", view)
-	}
 }
 
 func TestFailedUpdateCheckClearsStaleNoticeToNeutral(t *testing.T) {
@@ -348,9 +342,6 @@ func TestFailedUpdateCheckClearsStaleNoticeToNeutral(t *testing.T) {
 	view := fmt.Sprint(got.View())
 	if strings.Contains(view, "Update available: v1.3.0") {
 		t.Fatalf("View() still shows stale notice after failed check:\n%s", view)
-	}
-	if !strings.Contains(view, "not checked") {
-		t.Fatalf("View() missing neutral unchecked state after failed check:\n%s", view)
 	}
 }
 
@@ -722,7 +713,7 @@ func TestSavingUnsavedChatGPTAuthIsImmediateAndUsesEmailLabel(t *testing.T) {
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if got := stripANSI(m.renderHeader()); !strings.Contains(got, "person@example.com (unsaved)") {
+	if got := stripANSI(m.renderHeader(0)); !strings.Contains(got, "person@example.com (unsaved)") {
 		t.Fatalf("header missing unsaved email label:\n%s", got)
 	}
 
@@ -1554,8 +1545,8 @@ func TestRenderEveryChatGPTStatusState(t *testing.T) {
 		want []string
 	}{
 		{name: "fresh cache", view: profileStatusView{status: cached, phase: statusCached}, want: []string{"43%", "✓"}},
-		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"43%", "?"}},
-		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-", "?"}},
+		{name: "expired cache loading", view: profileStatusView{status: cached, phase: statusLoading, stale: true}, want: []string{"43%", "…"}},
+		{name: "missing cache loading", view: profileStatusView{phase: statusLoading}, want: []string{"-", "…"}},
 		{name: "sign in required", view: profileStatusView{status: signIn, phase: statusCached}, want: []string{"-", "✗"}},
 		{name: "cached failure", view: profileStatusView{status: cached, phase: statusFailed, stale: true}, want: []string{"43%", "✗"}},
 		{name: "uncached failure", view: profileStatusView{phase: statusFailed}, want: []string{"-", "✗"}},

@@ -20,79 +20,131 @@ const (
 	statusDisplayFailed
 )
 
-const profileStatusTimestampFormat = "02.01. 15:04"
+const (
+	profileStatusTimestampFormat = "02.01. 15:04"
+	stateHeading                 = "State"
+)
 
 func (m appModel) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
 
-	header := m.renderHeader()
+	header := m.renderHeader(0)
 	list := m.renderList()
 	diagnostics := m.renderDiagnostics()
 	footer := m.renderFooter()
 	status := m.renderStatus()
 
-	parts := []string{header, "", list}
+	width := panelContentWidth(m.width, header, list, diagnostics)
+	header = m.renderHeader(width)
+
+	headerPanel := headerPanelStyle
+	listPanel := panelStyle
+	diagnosticsPanel := diagnosticsPanelStyle
+	if width > 0 {
+		// lipgloss Width includes border and padding.
+		frame := panelStyle.GetHorizontalFrameSize()
+		headerPanel = headerPanel.Width(width + frame)
+		listPanel = listPanel.Width(width + frame)
+		diagnosticsPanel = diagnosticsPanel.Width(width + frame)
+	}
+
+	parts := []string{headerPanel.Render(header), "", listPanel.Render(list)}
 	if diagnostics != "" {
-		parts = append(parts, "", diagnostics)
+		parts = append(parts, "", diagnosticsPanel.Render(diagnostics))
 	}
 	parts = append(parts, "", footer, "", status)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return tea.NewView(baseStyle.Render(content))
 }
 
-func (m appModel) renderHeader() string {
-	current := "none"
-	if m.authActive {
-		if m.currentProfileKey != "" {
-			current = m.currentAuth.Label
-		} else {
-			current = m.currentAuth.Label
-			if current == "" {
-				current = "custom auth"
-			}
-			current += " (unsaved)"
+// panelContentWidth computes the shared inner width for all panels so they
+// stack with equal widths, clamped to the terminal width when known.
+func panelContentWidth(terminalWidth int, bodies ...string) int {
+	width := 0
+	for _, body := range bodies {
+		if body == "" {
+			continue
+		}
+		width = max(width, lipgloss.Width(body))
+	}
+	if terminalWidth > 0 {
+		width = min(width, max(20, terminalWidth-10))
+	}
+	return width
+}
+
+func (m appModel) renderHeader(width int) string {
+	title := headerTitle.Render("Codex Auth Manager")
+	if m.updateChecked && m.updateNotice != "" {
+		title += "  " + currentTag.Render("●") + "  " + infoStyle.Render(m.updateNotice)
+	}
+	if m.appVersion != "" && width > 0 {
+		version := versionStyle.Render(m.appVersion)
+		if gap := width - lipgloss.Width(title) - lipgloss.Width(version); gap >= 2 {
+			title += strings.Repeat(" ", gap) + version
 		}
 	}
 
-	authState := "logged out"
-	if m.authActive {
-		authState = "active"
+	ruleWidth := width
+	if ruleWidth <= 0 {
+		ruleWidth = lipgloss.Width(title)
 	}
 
-	lines := []string{
-		headerTitle.Render("Codex Auth Manager"),
-		"",
-		fmt.Sprintf("Current profile: %s", headerValue.Render(current)),
-		fmt.Sprintf("Profile status:  %s", currentTag.Render(authState)),
+	rows := []struct {
+		label string
+		value string
+	}{
+		{"Profile", m.headerProfileValue()},
+		{stateHeading, m.headerStateValue()},
+		{"Browser", headerDetail.Render(m.browserAuthStatus)},
+		{"Directory", headerDetail.Render(m.profileManager.ProfileDir)},
 	}
-	if currentStatus := m.renderCurrentStatusLine(); currentStatus != "" {
-		lines = append(lines, currentStatus)
+	labelWidth := 0
+	for _, row := range rows {
+		labelWidth = max(labelWidth, lipgloss.Width(row.label))
 	}
-	lines = append(lines,
-		m.renderUpdateLine(),
-		fmt.Sprintf("Browser auth:     %s", footerStyle.Render(m.browserAuthStatus)),
-		fmt.Sprintf("Profile dir:     %s", lipgloss.NewStyle().Foreground(mutedColor).Render(m.profileManager.ProfileDir)),
-	)
-	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	return panelStyle.Render(body)
+	lines := make([]string, 0, len(rows)+2)
+	lines = append(lines, title, dividerStyle.Render(strings.Repeat("─", ruleWidth)))
+	for _, row := range rows {
+		label := headerLabel.Render(row.label) + strings.Repeat(" ", labelWidth-lipgloss.Width(row.label)+2)
+		lines = append(lines, label+row.value)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-func (m appModel) renderCurrentStatusLine() string {
+func (m appModel) headerProfileValue() string {
+	if !m.authActive {
+		return emptyStyle.Render("none")
+	}
+	current := m.currentAuth.Label
+	if current == "" {
+		current = "custom auth"
+	}
+	if m.currentProfileKey == "" {
+		return headerValue.Render(current) + " " + headerDetail.Render("(unsaved)")
+	}
+	return headerValue.Render(current)
+}
+
+func (m appModel) headerStateValue() string {
+	if !m.authActive {
+		return inactiveTag.Render("○ logged out")
+	}
+
 	view, ok := m.currentChatGPTStatusView()
 	if !ok {
-		return ""
+		return headerDetail.Render("—")
 	}
 
 	state := statusDisplayStateFor(view)
-	lastRefreshed := "never"
+	parts := []string{stateLabelStyle.Render(state.label())}
 	if refreshedAt, ok := successfulFetchedAt(view); ok {
-		lastRefreshed = refreshedAt.In(time.Local).Format(profileStatusTimestampFormat)
+		parts = append(parts, headerDetail.Render("refreshed "+refreshedAt.In(time.Local).Format(profileStatusTimestampFormat)))
 	}
-	text := fmt.Sprintf("%s • last refreshed at %s", state.label(), lastRefreshed)
-	return fmt.Sprintf("State:           %s", footerStyle.Render(text))
+	return strings.Join(parts, headerDetail.Render(" · "))
 }
 
 func (m appModel) currentChatGPTStatusView() (profileStatusView, bool) {
@@ -154,7 +206,7 @@ func (state statusDisplayState) icon() string {
 	case statusDisplayCached:
 		return "✓"
 	case statusDisplayLoading:
-		return "?"
+		return "…"
 	case statusDisplayFailed:
 		return "✗"
 	default:
@@ -170,18 +222,6 @@ func (state statusDisplayState) style() lipgloss.Style {
 		return errorStyle
 	}
 	return footerStyle
-}
-
-func (m appModel) renderUpdateLine() string {
-	if !m.updateChecked {
-		return "Update:          not checked"
-	}
-
-	if m.updateNotice == "" {
-		return "Update:          up to date"
-	}
-
-	return fmt.Sprintf("Update:          %s", infoStyle.Render(m.updateNotice))
 }
 
 func (m appModel) renderList() string {
@@ -204,13 +244,13 @@ func (m appModel) renderList() string {
 		lines = append(lines, m.renderProfileLineWithStatus(style, prefix, p, p.Key == m.currentProfileKey, profileColumnWidth))
 	}
 
-	return panelStyle.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
 	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Limits", "State"}
+	headings := []string{"Limits", stateHeading}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
 		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
@@ -229,34 +269,36 @@ func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix strin
 		marker = currentTag.Render("●")
 	}
 	base := m.renderProfileCell(style, prefix, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlan(profile.Plan)
-	trailing := strings.TrimSpace(profile.Note)
+	separator := profileColumnSeparator.Render(" │ ")
+
+	note := strings.TrimSpace(profile.Note)
+	trailing := ""
+	if note != "" {
+		trailing = noteStyle.Render(note)
+	}
+	trailingStyle := lipgloss.NewStyle()
 	if profile.Kind == profilemgr.AuthKindChatGPT {
 		status := renderProfileColumns(m.renderProfileStatusColumns(profile.Key)...)
 		if trailing != "" {
-			trailing = status + profileColumnSeparator.Render(" │ ") + trailing
+			trailing = status + separator + trailing
 		} else {
 			trailing = status
+		}
+		if m.profileStatuses[profile.Key].stale {
+			trailingStyle = mutedStatusStyle
 		}
 	}
 	if trailing == "" {
 		return base
 	}
 
-	separator := profileColumnSeparator.Render(" │ ")
-	noteStyle := footerStyle
-	if profile.Kind == profilemgr.AuthKindChatGPT {
-		noteStyle = lipgloss.NewStyle()
-		if m.profileStatuses[profile.Key].stale {
-			noteStyle = mutedStatusStyle
-		}
-	}
 	continuationIndent := "    "
 	availableWidth := m.listContentWidth()
 	if availableWidth <= 0 {
-		return base + noteStyle.Render(separator+trailing)
+		return base + trailingStyle.Render(separator+trailing)
 	}
 	if lipgloss.Width(base)+lipgloss.Width(separator)+lipgloss.Width(trailing) <= availableWidth {
-		return base + noteStyle.Render(separator+trailing)
+		return base + trailingStyle.Render(separator+trailing)
 	}
 
 	firstLineWidth := availableWidth - lipgloss.Width(base) - lipgloss.Width(separator)
@@ -273,9 +315,9 @@ func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix strin
 		return base
 	}
 
-	line := base + noteStyle.Render(separator+wrapped[0])
+	line := base + trailingStyle.Render(separator+wrapped[0])
 	for _, part := range wrapped[1:] {
-		line += "\n" + noteStyle.Render(continuationIndent+part)
+		line += "\n" + trailingStyle.Render(continuationIndent+part)
 	}
 	return line
 }
@@ -414,7 +456,7 @@ func profileQuotaLabel(quota profilemgr.ProfileQuota) string {
 }
 
 func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Limits", "State"}
+	headings := []string{"Limits", stateHeading}
 	widths := make([]int, len(headings))
 	for i, heading := range headings {
 		widths[i] = lipgloss.Width(heading)
@@ -523,15 +565,10 @@ func (m appModel) renderFooter() string {
 	case modeInput:
 		return m.textInput.View()
 	case modeConfirm:
-		return footerStyle.Render(m.confirmPrompt)
+		return confirmStyle.Render(m.confirmPrompt)
 	case modeAuthenticating:
 		return footerStyle.Render(formatKeyHint("esc", "cancel authentication"))
 	case modeNormal:
-		navigationCommands := []string{
-			formatKeyHint("↑/↓", "move"),
-			formatKeyHint("enter", "activate"),
-			formatKeyHint("p", "cycle plan"),
-		}
 		profileCommands := []string{
 			formatKeyHint("n", "edit note"),
 		}
@@ -542,19 +579,31 @@ func (m appModel) renderFooter() string {
 			profileCommands = append(profileCommands, formatKeyHint("r", "edit label"))
 		}
 		profileCommands = append(profileCommands, formatKeyHint("d", "delete"))
-		globalCommands := []string{
-			formatKeyHint("s", "save"),
-			formatKeyHint("l", "logout"),
-			formatKeyHint("ctrl+r", "refresh"),
-			formatKeyHint("q", "quit"),
+
+		groups := []struct {
+			name  string
+			hints []string
+		}{
+			{"UI", []string{
+				formatKeyHint("↑/↓", "move"),
+				formatKeyHint("enter", "activate"),
+				formatKeyHint("p", "cycle plan"),
+			}},
+			{"Manage", profileCommands},
+			{"Global", []string{
+				formatKeyHint("s", "save"),
+				formatKeyHint("l", "logout"),
+				formatKeyHint("ctrl+r", "refresh"),
+				formatKeyHint("q", "quit"),
+			}},
 		}
 
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			footerStyle.Render("UI: "+strings.Join(navigationCommands, " • ")),
-			footerStyle.Render("Manage: "+strings.Join(profileCommands, " • ")),
-			footerStyle.Render("Global: "+strings.Join(globalCommands, " • ")),
-		)
+		lines := make([]string, 0, len(groups))
+		for _, group := range groups {
+			label := footerGroupStyle.Render(group.name) + strings.Repeat(" ", 8-len(group.name))
+			lines = append(lines, footerStyle.Render(label+strings.Join(group.hints, headerDetail.Render(" · "))))
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
 	default:
 		return ""
 	}
@@ -566,30 +615,32 @@ func (m appModel) renderDiagnostics() string {
 	}
 
 	lines := []string{
-		warningStyle.Render(fmt.Sprintf("Ignored %d invalid profile file(s):", len(m.invalidProfiles))),
+		warningStyle.Render(fmt.Sprintf("⚠ Ignored %d invalid profile file(s):", len(m.invalidProfiles))),
 	}
 	for i, issue := range m.invalidProfiles {
 		if i == 3 {
-			lines = append(lines, footerStyle.Render(fmt.Sprintf("...and %d more", len(m.invalidProfiles)-i)))
+			lines = append(lines, headerDetail.Render(fmt.Sprintf("...and %d more", len(m.invalidProfiles)-i)))
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%s %s", headerValue.Render(issue.Name), footerStyle.Render(issue.Reason)))
+		lines = append(lines, fmt.Sprintf("%s %s", headerValue.Render(issue.Name), headerDetail.Render(issue.Reason)))
 	}
 
-	return panelStyle.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 func (m appModel) renderStatus() string {
 	if m.errText != "" {
-		return errorStyle.Render("Error: " + m.errText)
+		return errorStyle.Render("✗ " + m.errText)
 	}
-	style := statusStyle
+	if m.status == "" {
+		return ""
+	}
+	s := statusStyle.Render("✓ " + m.status)
 	if m.statusKind == statusInfo {
-		style = infoStyle
+		s = infoStyle.Render("ℹ " + m.status)
 	}
-	s := style.Render(m.status)
 	if m.restartRequired {
-		s += lipgloss.NewStyle().Foreground(mutedColor).Render(" (Restart Codex to apply)")
+		s += headerDetail.Render(" (Restart Codex to apply)")
 	}
 	return s
 }

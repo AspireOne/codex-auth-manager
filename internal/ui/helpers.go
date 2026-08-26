@@ -3,7 +3,7 @@ package ui
 import profilemgr "codex-manage/internal/profiles"
 
 func formatKeyHint(key, action string) string {
-	return keyHintStyle.Render(key) + " " + action
+	return keyStyle.Render(key) + " " + action
 }
 
 func indexOfProfile(xs []profilemgr.ProfileSummary, target string) int {

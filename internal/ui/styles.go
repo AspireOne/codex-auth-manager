@@ -15,26 +15,47 @@ var (
 var (
 	accentColor  = lipgloss.Color("#8B5CF6")
 	accentSoft   = lipgloss.Color("#C4B5FD")
-	successColor = lipgloss.Color("#10B981")
+	successColor = lipgloss.Color("#34D399")
 	infoColor    = lipgloss.Color("#38BDF8")
-	errorColor   = lipgloss.Color("#F87171")
+	errorColor   = lipgloss.Color("#FB7185")
 	warningColor = lipgloss.Color("#FBBF24")
 	proColor     = lipgloss.Color("#F59E0B")
 	plusColor    = lipgloss.Color("#FBBF24")
-	freeColor    = lipgloss.Color("#FDE047")
+	freeColor    = lipgloss.Color("#E6DFA9")
 	apiColor     = lipgloss.Color("#F5D0A9")
 	mutedColor   = lipgloss.Color("#94A3B8")
-	panelBorder  = lipgloss.Color("#A78BFA")
-	headerTitle  = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
-	headerValue  = lipgloss.NewStyle().Bold(true).Foreground(accentSoft)
-	currentTag   = lipgloss.NewStyle().Foreground(successColor).Bold(true)
-	baseStyle    = lipgloss.NewStyle().
+	brightColor  = lipgloss.Color("#E2E8F0")
+
+	headerBorderColor      = lipgloss.Color("#A78BFA")
+	listBorderColor        = lipgloss.Color("#6366F1")
+	diagnosticsBorderColor = warningColor
+
+	headerTitle     = lipgloss.NewStyle().Bold(true).Foreground(accentSoft)
+	headerLabel     = lipgloss.NewStyle().Foreground(mutedColor)
+	headerValue     = lipgloss.NewStyle().Bold(true).Foreground(accentSoft)
+	headerDetail    = lipgloss.NewStyle().Foreground(mutedColor)
+	versionStyle    = lipgloss.NewStyle().Foreground(mutedColor)
+	dividerStyle    = lipgloss.NewStyle().Foreground(mutedColor).Faint(true)
+	stateLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(brightColor)
+	currentTag      = lipgloss.NewStyle().Foreground(successColor).Bold(true)
+	inactiveTag     = lipgloss.NewStyle().Foreground(mutedColor)
+	baseStyle       = lipgloss.NewStyle().
 			Padding(1, 2)
 
+	headerPanelStyle = lipgloss.NewStyle().
+				BorderForeground(headerBorderColor).
+				Border(lipgloss.RoundedBorder()).
+				Padding(1, 2)
+
 	panelStyle = lipgloss.NewStyle().
-			BorderForeground(panelBorder).
+			BorderForeground(listBorderColor).
 			Border(lipgloss.RoundedBorder()).
 			Padding(1, 2)
+
+	diagnosticsPanelStyle = lipgloss.NewStyle().
+				BorderForeground(diagnosticsBorderColor).
+				Border(lipgloss.RoundedBorder()).
+				Padding(1, 2)
 
 	itemStyle = lipgloss.NewStyle()
 
@@ -58,20 +79,33 @@ var (
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 
+	footerGroupStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(mutedColor)
+
 	profileColumnSeparator = lipgloss.NewStyle().
 				Foreground(mutedColor)
 
 	tableHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
+				Underline(true).
 				Foreground(mutedColor)
+
+	noteStyle = lipgloss.NewStyle().
+			Foreground(mutedColor).
+			Italic(true)
 
 	mutedStatusStyle = lipgloss.NewStyle().
 				Foreground(mutedColor).
 				Faint(true)
 
-	keyHintStyle = lipgloss.NewStyle().
+	keyStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(mutedColor)
+			Foreground(brightColor)
+
+	confirmStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(warningColor)
 
 	statusStyle = lipgloss.NewStyle().
 			Foreground(successColor).

@@ -177,11 +177,11 @@ func (m appModel) authenticateCmd(ctx context.Context, profile profilemgr.Profil
 func newTextInput() textinput.Model {
 	input := textinput.New()
 	styles := input.Styles()
-	styles.Focused.Prompt = footerStyle
-	styles.Focused.Text = footerStyle
-	styles.Blurred.Prompt = footerStyle
+	styles.Focused.Prompt = headerLabel
+	styles.Focused.Text = lipgloss.NewStyle()
+	styles.Blurred.Prompt = headerLabel
 	styles.Blurred.Text = footerStyle
-	styles.Cursor.Color = mutedColor
+	styles.Cursor.Color = accentColor
 	input.SetStyles(styles)
 	return input
 }
