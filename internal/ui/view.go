@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -336,7 +337,7 @@ func (m appModel) profileStatusValues(key string) []string {
 	view := m.statusViewForProfile(key)
 	limits := "-"
 	if view.status != nil && view.status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
-		limits = formatProfileQuotas(profileQuotas(view.status))
+		limits = m.formatProfileQuotas(profileQuotas(view.status))
 	}
 	return []string{limits, statusDisplayStateFor(view).icon()}
 }
@@ -370,7 +371,7 @@ func (m appModel) renderProfileQuotaCell(key string) string {
 			continue
 		}
 		remaining := max(0, min(100, quota.RemainingPercent))
-		percent := remainingPercentStyle(remaining).Render(fmt.Sprintf("%d%%", remaining))
+		percent := remainingPercentStyle(remaining).Render(quotaPercentValue(remaining, m.quotaPercentWidth()))
 		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), percent, profileQuotaReset(quota)))
 	}
 	if len(parts) == 0 {
@@ -407,19 +408,47 @@ func profileQuotas(status *profilemgr.ProfileStatus) []profilemgr.ProfileQuota {
 	}}
 }
 
-func formatProfileQuotas(quotas []profilemgr.ProfileQuota) string {
+func (m appModel) formatProfileQuotas(quotas []profilemgr.ProfileQuota) string {
 	parts := make([]string, 0, len(quotas))
+	percentWidth := m.quotaPercentWidth()
 	for _, quota := range quotas {
 		if !displayableProfileQuota(quota) {
 			continue
 		}
 		remaining := max(0, min(100, quota.RemainingPercent))
-		parts = append(parts, fmt.Sprintf("%s %d%% · %s", profileQuotaLabel(quota), remaining, profileQuotaReset(quota)))
+		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), quotaPercentValue(remaining, percentWidth), profileQuotaReset(quota)))
 	}
 	if len(parts) == 0 {
 		return "-"
 	}
 	return strings.Join(parts, "  ")
+}
+
+// quotaPercentValue renders a remaining percentage padded with trailing
+// whitespace to the given digit width, so percentages across profiles line
+// up by their leading digits (e.g. "88% " next to "100%").
+func quotaPercentValue(remaining, width int) string {
+	return fmt.Sprintf("%-*s", width+1, fmt.Sprintf("%d%%", remaining))
+}
+
+func (m appModel) quotaPercentWidth() int {
+	width := 0
+	for _, p := range m.profiles {
+		if p.Kind != profilemgr.AuthKindChatGPT {
+			continue
+		}
+		view := m.statusViewForProfile(p.Key)
+		if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
+			continue
+		}
+		for _, quota := range profileQuotas(view.status) {
+			if !displayableProfileQuota(quota) {
+				continue
+			}
+			width = max(width, len(strconv.Itoa(max(0, min(100, quota.RemainingPercent)))))
+		}
+	}
+	return width
 }
 
 func displayableProfileQuota(quota profilemgr.ProfileQuota) bool {

@@ -1281,6 +1281,34 @@ func TestRenderChatGPTStatusShowsOnlyAvailableQuotaWindows(t *testing.T) {
 	}
 }
 
+func TestRenderChatGPTStatusPercentagesLeftAligned(t *testing.T) {
+	firstReset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	secondReset := time.Date(2026, 9, 2, 1, 2, 0, 0, time.Local)
+	m := appModel{
+		width: 200,
+		profiles: []profilemgr.ProfileSummary{
+			{Key: "a", Label: "a@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
+			{Key: "b", Label: "b@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
+		},
+		profileStatuses: map[string]profileStatusView{
+			"a": {status: &profilemgr.ProfileStatus{FetchedAt: firstReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: []profilemgr.ProfileQuota{{WindowDurationMins: 300, RemainingPercent: 88, ResetsAt: firstReset}}}, phase: statusCached},
+			"b": {status: &profilemgr.ProfileStatus{FetchedAt: secondReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: []profilemgr.ProfileQuota{{WindowDurationMins: 300, RemainingPercent: 100, ResetsAt: secondReset}}}, phase: statusCached},
+		},
+	}
+
+	columnWidth := m.profileColumnWidth()
+	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
+	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
+
+	firstAt, secondAt := strings.Index(firstLine, "88%"), strings.Index(secondLine, "100%")
+	if firstAt < 0 || secondAt < 0 || firstAt != secondAt {
+		t.Fatalf("percentage digits are not left-aligned at column %d vs %d:\n%s\n%s", firstAt, secondAt, firstLine, secondLine)
+	}
+	if !strings.Contains(firstLine, "88%  ·") {
+		t.Fatalf("shorter percentage is not padded with trailing whitespace:\n%s", firstLine)
+	}
+}
+
 func TestRemainingPercentColorGradient(t *testing.T) {
 	tests := []struct {
 		percent int
