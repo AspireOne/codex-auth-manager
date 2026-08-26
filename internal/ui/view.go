@@ -361,21 +361,16 @@ func (m appModel) renderProfileQuotaCell(key string) string {
 	if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
 		return m.profileStatusValues(key)[0]
 	}
-	quotas := profileQuotas(view.status)
+	quotas := displayableQuotas(profileQuotas(view.status))
 	if len(quotas) == 0 {
 		return "-"
 	}
+	widths := m.quotaPercentWidths(quotas)
 	parts := make([]string, 0, len(quotas))
-	for _, quota := range quotas {
-		if !displayableProfileQuota(quota) {
-			continue
-		}
+	for i, quota := range quotas {
 		remaining := max(0, min(100, quota.RemainingPercent))
-		percent := remainingPercentStyle(remaining).Render(quotaPercentValue(remaining, m.quotaPercentWidth()))
+		percent := remainingPercentStyle(remaining).Render(quotaPercentValue(remaining, widths[i]))
 		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), percent, profileQuotaReset(quota)))
-	}
-	if len(parts) == 0 {
-		return "-"
 	}
 	return strings.Join(parts, "  ")
 }
@@ -409,17 +404,15 @@ func profileQuotas(status *profilemgr.ProfileStatus) []profilemgr.ProfileQuota {
 }
 
 func (m appModel) formatProfileQuotas(quotas []profilemgr.ProfileQuota) string {
-	parts := make([]string, 0, len(quotas))
-	percentWidth := m.quotaPercentWidth()
-	for _, quota := range quotas {
-		if !displayableProfileQuota(quota) {
-			continue
-		}
-		remaining := max(0, min(100, quota.RemainingPercent))
-		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), quotaPercentValue(remaining, percentWidth), profileQuotaReset(quota)))
-	}
-	if len(parts) == 0 {
+	displayable := displayableQuotas(quotas)
+	if len(displayable) == 0 {
 		return "-"
+	}
+	widths := m.quotaPercentWidths(displayable)
+	parts := make([]string, 0, len(displayable))
+	for i, quota := range displayable {
+		remaining := max(0, min(100, quota.RemainingPercent))
+		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), quotaPercentValue(remaining, widths[i]), profileQuotaReset(quota)))
 	}
 	return strings.Join(parts, "  ")
 }
@@ -431,8 +424,14 @@ func quotaPercentValue(remaining, width int) string {
 	return fmt.Sprintf("%-*s", width+1, fmt.Sprintf("%d%%", remaining))
 }
 
-func (m appModel) quotaPercentWidth() int {
-	width := 0
+// quotaPercentWidths returns per-quota digit widths for the given displayable
+// quotas, computed over profiles that share the same quota shape (identical
+// labels in the same order). Shapes never align with each other visually, so
+// they do not influence each other's padding (e.g. a lone monthly-only "0%"
+// stays unpadded).
+func (m appModel) quotaPercentWidths(quotas []profilemgr.ProfileQuota) []int {
+	signature := quotaShapeSignature(quotas)
+	widths := make([]int, len(quotas))
 	for _, p := range m.profiles {
 		if p.Kind != profilemgr.AuthKindChatGPT {
 			continue
@@ -441,14 +440,37 @@ func (m appModel) quotaPercentWidth() int {
 		if view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
 			continue
 		}
-		for _, quota := range profileQuotas(view.status) {
-			if !displayableProfileQuota(quota) {
-				continue
-			}
-			width = max(width, len(strconv.Itoa(max(0, min(100, quota.RemainingPercent)))))
+		candidate := displayableQuotas(profileQuotas(view.status))
+		if quotaShapeSignature(candidate) != signature {
+			continue
+		}
+		for i, quota := range candidate {
+			widths[i] = max(widths[i], percentDigitWidth(max(0, min(100, quota.RemainingPercent))))
 		}
 	}
-	return width
+	return widths
+}
+
+func quotaShapeSignature(quotas []profilemgr.ProfileQuota) string {
+	labels := make([]string, 0, len(quotas))
+	for _, quota := range quotas {
+		labels = append(labels, profileQuotaLabel(quota))
+	}
+	return strings.Join(labels, ",")
+}
+
+func displayableQuotas(quotas []profilemgr.ProfileQuota) []profilemgr.ProfileQuota {
+	displayable := make([]profilemgr.ProfileQuota, 0, len(quotas))
+	for _, quota := range quotas {
+		if displayableProfileQuota(quota) {
+			displayable = append(displayable, quota)
+		}
+	}
+	return displayable
+}
+
+func percentDigitWidth(remaining int) int {
+	return len(strconv.Itoa(remaining))
 }
 
 func displayableProfileQuota(quota profilemgr.ProfileQuota) bool {

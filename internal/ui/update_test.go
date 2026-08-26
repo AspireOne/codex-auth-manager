@@ -1309,6 +1309,45 @@ func TestRenderChatGPTStatusPercentagesLeftAligned(t *testing.T) {
 	}
 }
 
+func TestRenderChatGPTStatusPercentsAlignOnlyWithinMatchingQuotaShape(t *testing.T) {
+	fiveHourReset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	weeklyReset := time.Date(2026, 9, 2, 1, 2, 0, 0, time.Local)
+	monthlyReset := time.Date(2026, 9, 15, 20, 23, 0, 0, time.Local)
+	multiShape := []profilemgr.ProfileQuota{
+		{WindowDurationMins: 300, RemainingPercent: 100, ResetsAt: fiveHourReset},
+		{WindowDurationMins: 10080, RemainingPercent: 89, ResetsAt: weeklyReset},
+	}
+	m := appModel{
+		width: 200,
+		profiles: []profilemgr.ProfileSummary{
+			{Key: "multi", Label: "multi@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
+			{Key: "monthly", Label: "monthly@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
+			{Key: "weekly", Label: "weekly@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanFree},
+		},
+		profileStatuses: map[string]profileStatusView{
+			"multi":   {status: &profilemgr.ProfileStatus{FetchedAt: fiveHourReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: multiShape}, phase: statusCached},
+			"monthly": {status: &profilemgr.ProfileStatus{FetchedAt: monthlyReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: []profilemgr.ProfileQuota{{Monthly: true, RemainingPercent: 0, ResetsAt: monthlyReset}}}, phase: statusCached},
+			"weekly":  {status: &profilemgr.ProfileStatus{FetchedAt: weeklyReset.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: []profilemgr.ProfileQuota{{WindowDurationMins: 10080, RemainingPercent: 42, ResetsAt: weeklyReset}}}, phase: statusCached},
+		},
+	}
+
+	columnWidth := m.profileColumnWidth()
+	lines := make([]string, len(m.profiles))
+	for i := range m.profiles {
+		lines[i] = stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[i], false, columnWidth))
+	}
+
+	if !strings.Contains(lines[1], "Monthly 0% ·") {
+		t.Fatalf("monthly-only percent must stay unpadded:\n%s", lines[1])
+	}
+	if !strings.Contains(lines[2], "Weekly 42% ·") {
+		t.Fatalf("weekly-only percent must stay unpadded:\n%s", lines[2])
+	}
+	if !strings.Contains(lines[0], "Weekly 89% ") {
+		t.Fatalf("weekly percent must match the multi-shape width:\n%s", lines[0])
+	}
+}
+
 func TestRemainingPercentColorGradient(t *testing.T) {
 	tests := []struct {
 		percent int
