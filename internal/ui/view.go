@@ -52,9 +52,9 @@ func (m appModel) View() tea.View {
 		diagnosticsPanel = diagnosticsPanel.Width(width + frame)
 	}
 
-	parts := []string{headerPanel.Render(header), "", listPanel.Render(list)}
+	parts := []string{headerPanel.Render(header), listPanel.Render(list)}
 	if diagnostics != "" {
-		parts = append(parts, "", diagnosticsPanel.Render(diagnostics))
+		parts = append(parts, diagnosticsPanel.Render(diagnostics))
 	}
 	parts = append(parts, "", footer, "", status)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
