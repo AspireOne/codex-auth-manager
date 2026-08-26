@@ -1513,7 +1513,7 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 		},
 	}
 	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"Profile", "Plan", "Limits", "State", "Note", "5h 43% · 15:30", "✓"} {
+	for _, want := range []string{"Profile", "Plan", "Limits", "⚿", "Note", "5h 43% · 15:30", "✓"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
 		}

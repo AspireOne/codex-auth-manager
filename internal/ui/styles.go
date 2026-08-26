@@ -91,6 +91,11 @@ var (
 				Underline(true).
 				Foreground(mutedColor)
 
+	stateHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Underline(true).
+				Foreground(mutedColor)
+
 	noteStyle = lipgloss.NewStyle().
 			Foreground(mutedColor).
 			Italic(true)

@@ -23,6 +23,7 @@ const (
 const (
 	profileStatusTimestampFormat = "02.01. 15:04"
 	stateHeading                 = "State"
+	stateColumnHeading           = "⚿"
 )
 
 func (m appModel) View() tea.View {
@@ -250,10 +251,15 @@ func (m appModel) renderList() string {
 func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
 	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Limits", stateHeading}
+	headings := []string{"Limits", stateColumnHeading}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
-		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
+		style := tableHeaderStyle
+		if i == 1 {
+			style = stateHeaderStyle
+			heading += " "
+		}
+		headings[i] = style.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
 	}
 	return renderProfileColumns(append([]string{base}, append(headings, tableHeaderStyle.Render("Note"))...)...)
 }
@@ -456,11 +462,12 @@ func profileQuotaLabel(quota profilemgr.ProfileQuota) string {
 }
 
 func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Limits", stateHeading}
+	headings := []string{"Limits", stateColumnHeading}
 	widths := make([]int, len(headings))
 	for i, heading := range headings {
 		widths[i] = lipgloss.Width(heading)
 	}
+	widths[1]++
 	for _, p := range m.profiles {
 		if p.Kind != profilemgr.AuthKindChatGPT {
 			continue
