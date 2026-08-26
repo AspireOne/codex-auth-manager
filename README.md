@@ -10,7 +10,8 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 - save API-key auth with an optional label or automatic fingerprint
 - activate another saved profile
 - re-authenticate an existing ChatGPT profile in its own browser session
-- see cached ChatGPT quota usage, reset time, and authentication status
+- see cached ChatGPT 5-hour, weekly, and optional monthly quota usage,
+  reset times, and authentication status
 - assign Free, Plus, or Pro plans to ChatGPT profiles, with paid plans grouped first
 - identify API-key profiles with a distinct API plan
 - add a short note to a profile for quick context
@@ -183,4 +184,8 @@ Brave, Chromium, Chrome, and Edge are supported. If needed, choose the browser o
 | `CODEX_MANAGE_BROWSER_EXECUTABLE` | Browser executable path or command name |
 | `CODEX_MANAGE_BROWSER_PROFILES_DIR` | Browser-profile location |
 
-The profile list also shows each ChatGPT account's current quota usage, reset time, and sign-in status at a glance. Usage details are refreshed automatically and reused briefly, keeping profile switching fast.
+The profile list shows each ChatGPT account's available quota windows
+(5-hour, weekly, and optional monthly), remaining percentage, reset time,
+and sign-in status at a glance. Usage details are refreshed automatically and
+reused briefly, keeping profile switching fast; windows that Codex does not
+return are omitted.

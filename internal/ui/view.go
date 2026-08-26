@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -102,7 +103,7 @@ func (m appModel) renderList() string {
 func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
 	base := profile + "    " + tableHeaderStyle.Render("Plan")
-	headings := []string{"Rem.", "Resets at", "Auth", "Data"}
+	headings := []string{"Limits", "Auth", "Data"}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
 		headings[i] = tableHeaderStyle.Render(heading) + strings.Repeat(" ", widths[i]-lipgloss.Width(heading))
@@ -181,13 +182,11 @@ func (m appModel) profileStatusValues(key string) []string {
 	if !ok {
 		view = profileStatusView{phase: statusLoading}
 	}
-	usage := "-"
-	reset := "-"
+	limits := "-"
 	auth := "?"
 	if view.status != nil {
-		if view.status.UsedPercent != nil && view.status.ResetsAt != nil {
-			usage = fmt.Sprintf("%d%%", remainingPercent(*view.status.UsedPercent))
-			reset = view.status.ResetsAt.In(time.Local).Format("02.01. 15:04")
+		if view.status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
+			limits = formatProfileQuotas(profileQuotas(view.status))
 		}
 		switch view.status.AuthStatus {
 		case profilemgr.ProfileAuthAuthenticated:
@@ -209,7 +208,7 @@ func (m appModel) profileStatusValues(key string) []string {
 			cache = "Unavailable · failed"
 		}
 	}
-	return []string{usage, reset, auth, cache}
+	return []string{limits, auth, cache}
 }
 
 func remainingPercent(used int) int {
@@ -219,20 +218,117 @@ func remainingPercent(used int) int {
 func (m appModel) renderProfileStatusColumns(key string) []string {
 	values := m.profileStatusValues(key)
 	widths := m.profileStatusColumnWidths()
-	for i, value := range values {
-		values[i] = value + strings.Repeat(" ", widths[i]-lipgloss.Width(value))
-	}
-	values[0] = m.remainingPercentStyle(key).Render(values[0])
-	values[2] = m.profileAuthIndicatorStyle(key).Render(values[2])
+	limitValue := values[0]
+	values[0] = m.renderProfileQuotaCell(key) + strings.Repeat(" ", widths[0]-lipgloss.Width(limitValue))
+	values[1] = m.profileAuthIndicatorStyle(key).Render(values[1]) + strings.Repeat(" ", widths[1]-lipgloss.Width(values[1]))
+	values[2] += strings.Repeat(" ", widths[2]-lipgloss.Width(values[2]))
 	return values
 }
 
-func (m appModel) remainingPercentStyle(key string) lipgloss.Style {
+func (m appModel) renderProfileQuotaCell(key string) string {
 	view, ok := m.profileStatuses[key]
-	if !ok || view.status == nil || view.status.UsedPercent == nil || view.status.ResetsAt == nil {
-		return lipgloss.NewStyle()
+	if !ok || view.status == nil || view.status.AuthStatus != profilemgr.ProfileAuthAuthenticated {
+		return m.profileStatusValues(key)[0]
 	}
-	return lipgloss.NewStyle().Foreground(remainingPercentColor(remainingPercent(*view.status.UsedPercent)))
+	quotas := profileQuotas(view.status)
+	if len(quotas) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(quotas))
+	for _, quota := range quotas {
+		if !displayableProfileQuota(quota) {
+			continue
+		}
+		remaining := max(0, min(100, quota.RemainingPercent))
+		percent := remainingPercentStyle(remaining).Render(fmt.Sprintf("%d%%", remaining))
+		parts = append(parts, fmt.Sprintf("%s %s · %s", profileQuotaLabel(quota), percent, profileQuotaReset(quota)))
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, "  ")
+}
+
+func remainingPercentStyle(percent int) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(remainingPercentColor(percent))
+}
+
+func profileQuotas(status *profilemgr.ProfileStatus) []profilemgr.ProfileQuota {
+	if status == nil {
+		return nil
+	}
+	if len(status.Quotas) > 0 {
+		quotas := append([]profilemgr.ProfileQuota(nil), status.Quotas...)
+		sort.SliceStable(quotas, func(i, j int) bool {
+			if quotas[i].Monthly != quotas[j].Monthly {
+				return !quotas[i].Monthly
+			}
+			return quotas[i].WindowDurationMins < quotas[j].WindowDurationMins
+		})
+		return quotas
+	}
+	if status.UsedPercent == nil || status.ResetsAt == nil {
+		return nil
+	}
+	return []profilemgr.ProfileQuota{{
+		WindowDurationMins: 300,
+		RemainingPercent:   remainingPercent(*status.UsedPercent),
+		ResetsAt:           status.ResetsAt.In(time.Local),
+	}}
+}
+
+func formatProfileQuotas(quotas []profilemgr.ProfileQuota) string {
+	parts := make([]string, 0, len(quotas))
+	for _, quota := range quotas {
+		if !displayableProfileQuota(quota) {
+			continue
+		}
+		remaining := max(0, min(100, quota.RemainingPercent))
+		parts = append(parts, fmt.Sprintf("%s %d%% · %s", profileQuotaLabel(quota), remaining, profileQuotaReset(quota)))
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, "  ")
+}
+
+func displayableProfileQuota(quota profilemgr.ProfileQuota) bool {
+	return (quota.Monthly || quota.WindowDurationMins > 0) && !quota.ResetsAt.IsZero()
+}
+
+func profileQuotaReset(quota profilemgr.ProfileQuota) string {
+	format := "02.01. 15:04"
+	if !quota.Monthly && quota.WindowDurationMins == 300 {
+		format = "15:04"
+	}
+	return quota.ResetsAt.In(time.Local).Format(format)
+}
+
+func profileQuotaLabel(quota profilemgr.ProfileQuota) string {
+	if quota.Monthly {
+		return "Monthly"
+	}
+	switch quota.WindowDurationMins {
+	case 300:
+		return "5h"
+	case 10080:
+		return "Weekly"
+	}
+
+	const (
+		minutesPerHour = int64(60)
+		minutesPerDay  = 24 * minutesPerHour
+	)
+	if quota.WindowDurationMins >= 28*minutesPerDay {
+		return "Monthly"
+	}
+	if quota.WindowDurationMins%minutesPerDay == 0 {
+		return fmt.Sprintf("%dd", quota.WindowDurationMins/minutesPerDay)
+	}
+	if quota.WindowDurationMins%minutesPerHour == 0 {
+		return fmt.Sprintf("%dh", quota.WindowDurationMins/minutesPerHour)
+	}
+	return fmt.Sprintf("%dm", quota.WindowDurationMins)
 }
 
 func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {
@@ -251,7 +347,7 @@ func (m appModel) profileAuthIndicatorStyle(key string) lipgloss.Style {
 }
 
 func (m appModel) profileStatusColumnWidths() []int {
-	headings := []string{"Rem.", "Resets at", "Auth", "Data"}
+	headings := []string{"Limits", "Auth", "Data"}
 	widths := make([]int, len(headings))
 	for i, heading := range headings {
 		widths[i] = lipgloss.Width(heading)

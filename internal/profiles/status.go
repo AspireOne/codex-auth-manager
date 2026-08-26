@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// Version 2 invalidates authentication states written before requiresOpenaiAuth
-// was correctly recognized as a capability requirement rather than login state.
-const profileStatusCacheVersion = 2
+// Version 3 stores every available quota window instead of only the shortest
+// one. It also stores the optional monthly individual limit.
+const profileStatusCacheVersion = 3
 
 type ProfileAuthStatus string
 
@@ -22,11 +22,21 @@ const (
 	ProfileAuthSignInRequired ProfileAuthStatus = "sign_in_required"
 )
 
+type ProfileQuota struct {
+	WindowDurationMins int64     `json:"window_duration_mins,omitempty"`
+	Monthly            bool      `json:"monthly,omitempty"`
+	RemainingPercent   int       `json:"remaining_percent"`
+	ResetsAt           time.Time `json:"resets_at"`
+}
+
 type ProfileStatus struct {
-	FetchedAt   time.Time         `json:"fetched_at"`
-	AuthStatus  ProfileAuthStatus `json:"auth_status"`
-	UsedPercent *int              `json:"used_percent,omitempty"`
-	ResetsAt    *time.Time        `json:"resets_at,omitempty"`
+	FetchedAt  time.Time         `json:"fetched_at"`
+	AuthStatus ProfileAuthStatus `json:"auth_status"`
+	Quotas     []ProfileQuota    `json:"quotas,omitempty"`
+	// UsedPercent and ResetsAt are retained as the legacy nearest-window view
+	// for callers that have not migrated to Quotas yet.
+	UsedPercent *int       `json:"used_percent,omitempty"`
+	ResetsAt    *time.Time `json:"resets_at,omitempty"`
 }
 
 type profileStatusCache struct {
@@ -70,6 +80,9 @@ func (m Manager) SaveProfileStatus(key string, status ProfileStatus) error {
 	if status.ResetsAt != nil {
 		reset := status.ResetsAt.UTC()
 		status.ResetsAt = &reset
+	}
+	for i := range status.Quotas {
+		status.Quotas[i].ResetsAt = status.Quotas[i].ResetsAt.UTC()
 	}
 	cache, err := m.readProfileStatusCache()
 	if err != nil {
@@ -201,10 +214,25 @@ func validCachedStatus(status ProfileStatus) bool {
 		return false
 	}
 	if status.AuthStatus == ProfileAuthSignInRequired {
-		return status.UsedPercent == nil && status.ResetsAt == nil
+		return status.UsedPercent == nil && status.ResetsAt == nil && len(status.Quotas) == 0
 	}
-	return status.AuthStatus == ProfileAuthAuthenticated && status.UsedPercent != nil &&
-		*status.UsedPercent >= 0 && *status.UsedPercent <= 100 && status.ResetsAt != nil
+	if status.AuthStatus != ProfileAuthAuthenticated {
+		return false
+	}
+	if len(status.Quotas) > 0 {
+		for _, quota := range status.Quotas {
+			if !validProfileQuota(quota) {
+				return false
+			}
+		}
+		return true
+	}
+	return status.UsedPercent != nil && *status.UsedPercent >= 0 && *status.UsedPercent <= 100 && status.ResetsAt != nil
+}
+
+func validProfileQuota(quota ProfileQuota) bool {
+	return (quota.Monthly || quota.WindowDurationMins > 0) &&
+		quota.RemainingPercent >= 0 && quota.RemainingPercent <= 100 && !quota.ResetsAt.IsZero()
 }
 
 func readAuthDescriptorBytes(data []byte) (authDescriptor, error) {

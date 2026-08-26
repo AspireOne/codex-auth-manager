@@ -39,6 +39,39 @@ func TestProfileStatusCacheRoundTripTTLAndPermissions(t *testing.T) {
 	}
 }
 
+func TestProfileStatusCacheRoundTripsAllQuotaWindows(t *testing.T) {
+	m := NewManager(filepath.Join(t.TempDir(), ".codex"))
+	if err := m.ensurePrivateStorage(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	status := ProfileStatus{
+		FetchedAt:  now,
+		AuthStatus: ProfileAuthAuthenticated,
+		Quotas: []ProfileQuota{
+			{WindowDurationMins: 300, RemainingPercent: 82, ResetsAt: now.Add(time.Hour)},
+			{WindowDurationMins: 10080, RemainingPercent: 58, ResetsAt: now.Add(7 * 24 * time.Hour)},
+			{Monthly: true, RemainingPercent: 73, ResetsAt: now.Add(30 * 24 * time.Hour)},
+		},
+	}
+	if err := m.SaveProfileStatus("work", status); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := m.LoadProfileStatuses(map[string]AuthKind{"work": AuthKindChatGPT}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded["work"]
+	if len(got.Quotas) != len(status.Quotas) {
+		t.Fatalf("loaded quotas = %#v, want %#v", got.Quotas, status.Quotas)
+	}
+	for i, want := range status.Quotas {
+		if got.Quotas[i] != want {
+			t.Errorf("loaded quota[%d] = %#v, want %#v", i, got.Quotas[i], want)
+		}
+	}
+}
+
 func TestProfileStatusCachePrunesFutureDeletedAndAPIKeyEntries(t *testing.T) {
 	m := NewManager(filepath.Join(t.TempDir(), ".codex"))
 	if err := m.ensurePrivateStorage(); err != nil {
@@ -96,6 +129,9 @@ func TestProfileStatusCacheTreatsCorruptionUnknownSchemaAndReadFailureAsMissing(
 		{name: "poisoned version one cache", setup: func(t *testing.T, manager Manager) {
 			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":1,"profiles":{"work":{"fetched_at":"2026-08-16T12:00:00Z","auth_status":"sign_in_required"}}}`))
 		}},
+		{name: "legacy quota cache", setup: func(t *testing.T, manager Manager) {
+			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":2,"profiles":{"work":{"fetched_at":"2026-08-16T12:00:00Z","auth_status":"authenticated","used_percent":20,"resets_at":"2026-08-16T13:00:00Z"}}}`))
+		}},
 		{name: "unknown future schema", setup: func(t *testing.T, manager Manager) {
 			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":999,"profiles":{"work":{}}}`))
 		}},
@@ -149,6 +185,7 @@ func TestProfileStatusCacheMergesInvalidatesAndRejectsInvalidEntries(t *testing.
 		{},
 		{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated},
 		{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated, UsedPercent: &invalidPercent},
+		{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated, Quotas: []ProfileQuota{{WindowDurationMins: 300, RemainingPercent: 101, ResetsAt: now}}},
 		{FetchedAt: now, AuthStatus: "unexpected"},
 	} {
 		if err := manager.SaveProfileStatus("invalid", invalid); err == nil {

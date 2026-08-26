@@ -1087,14 +1087,78 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 	columnWidth := m.profileColumnWidth()
 	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
 	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
-	if strings.Count(firstLine, "│") != 4 || strings.Count(secondLine, "│") != 4 {
+	if strings.Count(firstLine, "│") != 3 || strings.Count(secondLine, "│") != 3 {
 		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
 	}
-	if !strings.Contains(firstLine, "99%") || !strings.Contains(secondLine, "0%") {
-		t.Fatalf("remaining percentages are incorrect:\n%s\n%s", firstLine, secondLine)
+	if !strings.Contains(firstLine, "99%") || strings.Contains(secondLine, "%") {
+		t.Fatalf("quota percentages are incorrect:\n%s\n%s", firstLine, secondLine)
 	}
-	if firstAuth, secondAuth := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗"); firstAuth != secondAuth {
-		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", firstAuth, secondAuth, firstLine, secondLine)
+	firstAuth, secondAuth := strings.Index(firstLine, "✓"), strings.Index(secondLine, "✗")
+	if firstAuth < 0 || secondAuth < 0 || lipgloss.Width(firstLine[:firstAuth]) != lipgloss.Width(secondLine[:secondAuth]) {
+		t.Fatalf("authentication columns are not aligned: first=%d second=%d\n%s\n%s", lipgloss.Width(firstLine[:firstAuth]), lipgloss.Width(secondLine[:secondAuth]), firstLine, secondLine)
+	}
+}
+
+func TestRenderChatGPTStatusShowsOnlyAvailableQuotaWindows(t *testing.T) {
+	fiveHourReset := time.Date(2026, 8, 16, 15, 30, 0, 0, time.Local)
+	weeklyReset := time.Date(2026, 9, 2, 1, 2, 0, 0, time.Local)
+	monthlyReset := time.Date(2026, 9, 15, 20, 23, 0, 0, time.Local)
+	tests := []struct {
+		name   string
+		quotas []profilemgr.ProfileQuota
+		want   []string
+		absent []string
+	}{
+		{
+			name: "five hour and weekly",
+			quotas: []profilemgr.ProfileQuota{
+				{WindowDurationMins: 300, RemainingPercent: 99, ResetsAt: fiveHourReset},
+				{WindowDurationMins: 10080, RemainingPercent: 58, ResetsAt: weeklyReset},
+			},
+			want:   []string{"Limits", "5h 99% · 15:30", "Weekly 58%", "02.09. 01:02"},
+			absent: []string{"16.08. 15:30"},
+		},
+		{
+			name:   "monthly only",
+			quotas: []profilemgr.ProfileQuota{{Monthly: true, RemainingPercent: 73, ResetsAt: monthlyReset}},
+			want:   []string{"Monthly 73%", "15.09. 20:23"},
+			absent: []string{"5h", "Weekly"},
+		},
+		{
+			name:   "weekly only",
+			quotas: []profilemgr.ProfileQuota{{WindowDurationMins: 10080, RemainingPercent: 42, ResetsAt: weeklyReset}},
+			want:   []string{"Weekly 42%"},
+			absent: []string{"5h", "Monthly"},
+		},
+		{
+			name:   "five hour only",
+			quotas: []profilemgr.ProfileQuota{{WindowDurationMins: 300, RemainingPercent: 88, ResetsAt: fiveHourReset}},
+			want:   []string{"5h 88%"},
+			absent: []string{"Weekly", "Monthly"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := appModel{
+				width:    200,
+				profiles: []profilemgr.ProfileSummary{{Key: "chat", Label: "chat@example.com", Kind: profilemgr.AuthKindChatGPT, Plan: profilemgr.PlanPlus}},
+				profileStatuses: map[string]profileStatusView{"chat": {
+					status: &profilemgr.ProfileStatus{AuthStatus: profilemgr.ProfileAuthAuthenticated, Quotas: test.quotas},
+					phase:  statusCached,
+				}},
+			}
+			rendered := stripANSI(m.renderList())
+			for _, want := range test.want {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered list missing %q:\n%s", want, rendered)
+				}
+			}
+			for _, absent := range test.absent {
+				if strings.Contains(rendered, absent) {
+					t.Fatalf("rendered list unexpectedly contains %q:\n%s", absent, rendered)
+				}
+			}
+		})
 	}
 }
 
@@ -1330,7 +1394,7 @@ func TestRenderChatGPTStatusStatesAndLeavesAPIKeysUnchanged(t *testing.T) {
 		},
 	}
 	rendered := stripANSI(m.renderList())
-	for _, want := range []string{"Profile", "Plan", "Rem.", "Resets at", "Auth", "Cache", "Note", "43%", "16.08. 15:30", "✓", "Cached"} {
+	for _, want := range []string{"Profile", "Plan", "Limits", "Auth", "Cache", "Note", "5h 43% · 15:30", "✓", "Cached"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered list missing %q:\n%s", want, rendered)
 		}

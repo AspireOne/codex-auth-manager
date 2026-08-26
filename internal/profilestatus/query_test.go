@@ -53,6 +53,92 @@ func TestStatusFromRateLimitsPrefersCodexBucketAndRoundsUsage(t *testing.T) {
 	}
 }
 
+func TestStatusFromRateLimitsPreservesAllWindowsAndMonthlyLimit(t *testing.T) {
+	fiveHourUsed, weeklyUsed := 17.6, 42.4
+	fiveHourMinutes, weeklyMinutes := int64(300), int64(10080)
+	fiveHourReset, weeklyReset, monthlyReset := int64(1_900_000_000), int64(2_000_000_000), int64(2_100_000_000)
+	monthlyRemaining := 73
+	status, err := statusFromRateLimits(rateLimitsResponse{RateLimitsByLimitID: map[string]rateLimit{
+		"codex": {
+			// The API does not guarantee that primary is the five-hour window.
+			Primary:         &rateWindow{UsedPercent: &weeklyUsed, WindowDurationMin: &weeklyMinutes, ResetsAt: &weeklyReset},
+			Secondary:       &rateWindow{UsedPercent: &fiveHourUsed, WindowDurationMin: &fiveHourMinutes, ResetsAt: &fiveHourReset},
+			IndividualLimit: &individualLimit{RemainingPercent: &monthlyRemaining, ResetsAt: &monthlyReset},
+		},
+	}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(status.Quotas) != 3 {
+		t.Fatalf("quota count = %d, want 3: %#v", len(status.Quotas), status.Quotas)
+	}
+	wants := []struct {
+		minutes int64
+		monthly bool
+		remain  int
+		reset   int64
+	}{
+		{minutes: fiveHourMinutes, remain: 82, reset: fiveHourReset},
+		{minutes: weeklyMinutes, remain: 58, reset: weeklyReset},
+		{monthly: true, remain: monthlyRemaining, reset: monthlyReset},
+	}
+	for i, want := range wants {
+		got := status.Quotas[i]
+		if got.WindowDurationMins != want.minutes || got.Monthly != want.monthly ||
+			got.RemainingPercent != want.remain || got.ResetsAt.Unix() != want.reset {
+			t.Errorf("quota[%d] = %#v, want duration=%d monthly=%v remaining=%d reset=%d", i, got, want.minutes, want.monthly, want.remain, want.reset)
+		}
+	}
+	if status.UsedPercent == nil || *status.UsedPercent != 18 || status.ResetsAt == nil || status.ResetsAt.Unix() != fiveHourReset {
+		t.Fatalf("legacy nearest view = %v/%v, want 18%%/%d", status.UsedPercent, status.ResetsAt, fiveHourReset)
+	}
+}
+
+func TestStatusFromRateLimitsAcceptsOnlyTheWindowsReturned(t *testing.T) {
+	weeklyUsed, weeklyMinutes, weeklyReset := 12.0, int64(10080), int64(1_900_000_000)
+	monthlyRemaining, monthlyReset := 80, int64(2_000_000_000)
+	tests := []struct {
+		name   string
+		limits rateLimit
+		want   int
+	}{
+		{
+			name: "weekly only",
+			limits: rateLimit{Primary: &rateWindow{
+				UsedPercent: &weeklyUsed, WindowDurationMin: &weeklyMinutes, ResetsAt: &weeklyReset,
+			}},
+			want: 1,
+		},
+		{
+			name: "invalid secondary skipped",
+			limits: rateLimit{
+				Primary:   &rateWindow{UsedPercent: &weeklyUsed, WindowDurationMin: &weeklyMinutes, ResetsAt: &weeklyReset},
+				Secondary: &rateWindow{UsedPercent: &weeklyUsed, WindowDurationMin: nil, ResetsAt: &weeklyReset},
+			},
+			want: 1,
+		},
+		{
+			name: "monthly only",
+			limits: rateLimit{IndividualLimit: &individualLimit{
+				RemainingPercent: &monthlyRemaining, ResetsAt: &monthlyReset,
+			}},
+			want: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, err := statusFromRateLimits(rateLimitsResponse{RateLimits: &test.limits}, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(status.Quotas) != test.want {
+				t.Fatalf("quotas = %#v, want %d returned quota(s)", status.Quotas, test.want)
+			}
+		})
+	}
+}
+
 func TestStatusFromRateLimitsUsesCompatibleFallback(t *testing.T) {
 	percent := 12.0
 	minutes, reset := int64(300), int64(1_900_000_000)
@@ -100,11 +186,14 @@ func TestQueryerFetchEndToEnd(t *testing.T) {
 		name          string
 		scenario      string
 		wantPercent   int
+		wantQuotas    int
+		wantMonthly   bool
 		wantSignIn    bool
 		wantErrorText string
 	}{
-		{name: "preferred shortest window", scenario: "success", wantPercent: 36},
-		{name: "compatible fallback", scenario: "fallback", wantPercent: 24},
+		{name: "all returned windows", scenario: "success", wantPercent: 36, wantQuotas: 2},
+		{name: "compatible fallback", scenario: "fallback", wantPercent: 24, wantQuotas: 1},
+		{name: "optional monthly limit", scenario: "monthly", wantPercent: 80, wantQuotas: 2, wantMonthly: true},
 		{name: "account requires auth", scenario: "signed-out", wantSignIn: true},
 		{name: "non ChatGPT account", scenario: "api-account", wantSignIn: true},
 		{name: "explicit RPC auth rejection", scenario: "auth-rejected", wantSignIn: true},
@@ -132,8 +221,8 @@ func TestQueryerFetchEndToEnd(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if status.UsedPercent == nil || *status.UsedPercent != test.wantPercent || status.ResetsAt == nil {
-					t.Fatalf("status = %#v, want %d%% with reset", status, test.wantPercent)
+				if status.UsedPercent == nil || *status.UsedPercent != test.wantPercent || status.ResetsAt == nil || len(status.Quotas) != test.wantQuotas || (test.wantMonthly && !status.Quotas[len(status.Quotas)-1].Monthly) {
+					t.Fatalf("status = %#v, want %d%% with reset and %d quota(s)", status, test.wantPercent, test.wantQuotas)
 				}
 			}
 		})
@@ -330,6 +419,8 @@ func TestStatusHelperProcess(t *testing.T) {
 				time.Sleep(time.Hour)
 			case "fallback":
 				fmt.Printf(`{"id":%d,"result":{"rateLimits":{"primary":{"usedPercent":24,"windowDurationMins":300,"resetsAt":1900000000}},"rateLimitsByLimitId":null}}`+"\n", request.ID)
+			case "monthly":
+				fmt.Printf(`{"id":%d,"result":{"rateLimits":{"primary":{"usedPercent":80,"windowDurationMins":300,"resetsAt":1900000000},"individualLimit":{"remainingPercent":70,"resetsAt":2000000000}},"rateLimitsByLimitId":null}}`+"\n", request.ID)
 			default:
 				fmt.Println(`{"method":"account/rateLimits/updated","params":{"ignored":true}}`)
 				fmt.Printf(`{"id":%d,"result":{"rateLimits":{"primary":{"usedPercent":99,"windowDurationMins":300,"resetsAt":1900000000}},"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":10,"windowDurationMins":10080,"resetsAt":2000000000},"secondary":{"usedPercent":35.6,"windowDurationMins":300,"resetsAt":1900000000}}}}}`+"\n", request.ID)

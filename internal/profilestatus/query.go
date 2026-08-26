@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -77,8 +78,14 @@ type rateWindow struct {
 }
 
 type rateLimit struct {
-	Primary   *rateWindow `json:"primary"`
-	Secondary *rateWindow `json:"secondary"`
+	Primary         *rateWindow      `json:"primary"`
+	Secondary       *rateWindow      `json:"secondary"`
+	IndividualLimit *individualLimit `json:"individualLimit"`
+}
+
+type individualLimit struct {
+	RemainingPercent *int   `json:"remainingPercent"`
+	ResetsAt         *int64 `json:"resetsAt"`
 }
 
 type rateLimitsResponse struct {
@@ -114,30 +121,65 @@ func statusFromRateLimits(response rateLimitsResponse, fetchedAt time.Time) (pro
 		}
 		limits = *response.RateLimits
 	}
-	window, err := shortestWindow(limits)
-	if err != nil {
-		return profilemgr.ProfileStatus{}, err
+	quotas := make([]profilemgr.ProfileQuota, 0, 3)
+	for _, window := range []*rateWindow{limits.Primary, limits.Secondary} {
+		if quota, ok := quotaFromRateWindow(window); ok {
+			quotas = append(quotas, quota)
+		}
 	}
-	percent := int(math.Round(*window.UsedPercent))
-	if percent < 0 {
-		percent = 0
+	if quota, ok := quotaFromIndividualLimit(limits.IndividualLimit); ok {
+		quotas = append(quotas, quota)
 	}
-	if percent > 100 {
-		percent = 100
+	if len(quotas) == 0 {
+		return profilemgr.ProfileStatus{}, errors.New("codex did not return a usable quota window")
 	}
-	reset := time.Unix(*window.ResetsAt, 0).UTC()
+	sort.SliceStable(quotas, func(i, j int) bool {
+		if quotas[i].Monthly != quotas[j].Monthly {
+			return !quotas[i].Monthly
+		}
+		return quotas[i].WindowDurationMins < quotas[j].WindowDurationMins
+	})
+
+	nearest := quotas[0]
+	percent := 100 - nearest.RemainingPercent
+	reset := nearest.ResetsAt
+	if window, err := shortestWindow(limits); err == nil {
+		percent = normalizedPercent(*window.UsedPercent)
+		reset = time.Unix(*window.ResetsAt, 0).UTC()
+	}
 	return profilemgr.ProfileStatus{
 		FetchedAt: fetchedAt.UTC(), AuthStatus: profilemgr.ProfileAuthAuthenticated,
-		UsedPercent: &percent, ResetsAt: &reset,
+		Quotas: quotas, UsedPercent: &percent, ResetsAt: &reset,
 	}, nil
+}
+
+func quotaFromRateWindow(window *rateWindow) (profilemgr.ProfileQuota, bool) {
+	if !usableRateWindow(window) {
+		return profilemgr.ProfileQuota{}, false
+	}
+	usedPercent := normalizedPercent(*window.UsedPercent)
+	return profilemgr.ProfileQuota{
+		WindowDurationMins: *window.WindowDurationMin,
+		RemainingPercent:   100 - usedPercent,
+		ResetsAt:           time.Unix(*window.ResetsAt, 0).UTC(),
+	}, true
+}
+
+func quotaFromIndividualLimit(limit *individualLimit) (profilemgr.ProfileQuota, bool) {
+	if limit == nil || limit.RemainingPercent == nil || limit.ResetsAt == nil || *limit.ResetsAt <= 0 {
+		return profilemgr.ProfileQuota{}, false
+	}
+	return profilemgr.ProfileQuota{
+		Monthly:          true,
+		RemainingPercent: max(0, min(100, *limit.RemainingPercent)),
+		ResetsAt:         time.Unix(*limit.ResetsAt, 0).UTC(),
+	}, true
 }
 
 func shortestWindow(limits rateLimit) (*rateWindow, error) {
 	var selected *rateWindow
 	for _, window := range []*rateWindow{limits.Primary, limits.Secondary} {
-		if window == nil || window.UsedPercent == nil || window.WindowDurationMin == nil ||
-			window.ResetsAt == nil || *window.WindowDurationMin <= 0 || *window.ResetsAt <= 0 ||
-			math.IsNaN(*window.UsedPercent) || math.IsInf(*window.UsedPercent, 0) {
+		if !usableRateWindow(window) {
 			continue
 		}
 		if selected == nil || *window.WindowDurationMin < *selected.WindowDurationMin {
@@ -148,6 +190,17 @@ func shortestWindow(limits rateLimit) (*rateWindow, error) {
 		return nil, errors.New("codex did not return a usable quota window")
 	}
 	return selected, nil
+}
+
+func usableRateWindow(window *rateWindow) bool {
+	return window != nil && window.UsedPercent != nil && window.WindowDurationMin != nil &&
+		window.ResetsAt != nil && *window.WindowDurationMin > 0 && *window.ResetsAt > 0 &&
+		!math.IsNaN(*window.UsedPercent) && !math.IsInf(*window.UsedPercent, 0)
+}
+
+func normalizedPercent(percent float64) int {
+	used := int(math.Round(percent))
+	return max(0, min(100, used))
 }
 
 func classifyError(err error) error {
