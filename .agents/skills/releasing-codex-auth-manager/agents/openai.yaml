@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release codex-auth-manager"
+  short_description: "Release and verify Brew/Scoop updates"
+  default_prompt: "Use $releasing-codex-auth-manager to publish a release and verify Homebrew and Scoop."
