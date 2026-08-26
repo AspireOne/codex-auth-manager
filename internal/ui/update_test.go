@@ -1170,7 +1170,6 @@ func TestRenderProfileLinePlacesNoteInlineAndWrapsContinuation(t *testing.T) {
 
 	line := m.renderProfileLine(
 		itemStyle,
-		"  ",
 		"work",
 		"this note should wrap onto another line cleanly",
 		profilemgr.PlanFree,
@@ -1204,8 +1203,8 @@ func TestRenderChatGPTStatusUsesAlignedSeparatedColumns(t *testing.T) {
 	}
 
 	columnWidth := m.profileColumnWidth()
-	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
-	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
+	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, m.profiles[0], false, columnWidth))
+	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, m.profiles[1], false, columnWidth))
 	if strings.Count(firstLine, "│") != 2 || strings.Count(secondLine, "│") != 2 {
 		t.Fatalf("rows do not have distinct columns:\n%s\n%s", firstLine, secondLine)
 	}
@@ -1297,8 +1296,8 @@ func TestRenderChatGPTStatusPercentagesLeftAligned(t *testing.T) {
 	}
 
 	columnWidth := m.profileColumnWidth()
-	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[0], false, columnWidth))
-	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[1], false, columnWidth))
+	firstLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, m.profiles[0], false, columnWidth))
+	secondLine := stripANSI(m.renderProfileLineWithStatus(itemStyle, m.profiles[1], false, columnWidth))
 
 	firstAt, secondAt := strings.Index(firstLine, "88%"), strings.Index(secondLine, "100%")
 	if firstAt < 0 || secondAt < 0 || firstAt != secondAt {
@@ -1334,7 +1333,7 @@ func TestRenderChatGPTStatusPercentsAlignOnlyWithinMatchingQuotaShape(t *testing
 	columnWidth := m.profileColumnWidth()
 	lines := make([]string, len(m.profiles))
 	for i := range m.profiles {
-		lines[i] = stripANSI(m.renderProfileLineWithStatus(itemStyle, "  ", m.profiles[i], false, columnWidth))
+		lines[i] = stripANSI(m.renderProfileLineWithStatus(itemStyle, m.profiles[i], false, columnWidth))
 	}
 
 	if !strings.Contains(lines[1], "Monthly 0% ·") {
@@ -1369,7 +1368,7 @@ func TestRemainingPercentColorGradient(t *testing.T) {
 	}
 }
 
-func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
+func TestRenderListHighlightsSelectedEmailWithoutCursor(t *testing.T) {
 	m := appModel{
 		width:             80,
 		cursor:            0,
@@ -1397,9 +1396,21 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 	if currentLine == "" || otherLine == "" {
 		t.Fatalf("rendered list missing expected notes:\n%s", rendered)
 	}
+	if strings.Contains(stripANSI(rendered), "»") {
+		t.Fatalf("rendered list still includes cursor marker:\n%s", rendered)
+	}
+	if !strings.Contains(currentLine, selectedItemStyle.Render("work")) {
+		t.Fatalf("selected email is not highlighted:\n%s", currentLine)
+	}
+	if strings.Contains(otherLine, selectedItemStyle.Render("personal")) {
+		t.Fatalf("unselected email is highlighted:\n%s", otherLine)
+	}
 
 	currentPlain := stripANSI(currentLine)
 	otherPlain := stripANSI(otherLine)
+	if !strings.HasPrefix(currentPlain, "work") || !strings.HasPrefix(otherPlain, "personal") {
+		t.Fatalf("profile labels do not start in the first column:\n%s\n%s", currentPlain, otherPlain)
+	}
 	currentNoteIdx := strings.Index(currentPlain, "current note")
 	otherNoteIdx := strings.Index(otherPlain, "other note")
 	if currentNoteIdx < 0 || otherNoteIdx < 0 {
@@ -1409,9 +1420,6 @@ func TestRenderListAlignsNotesWithCompactCurrentIndicator(t *testing.T) {
 	otherIdx := lipgloss.Width(otherPlain[:otherNoteIdx])
 	if currentIdx != otherIdx {
 		t.Fatalf("notes start at different columns: current=%d other=%d\n%s", currentIdx, otherIdx, rendered)
-	}
-	if strings.Contains(currentPlain, "• current") {
-		t.Fatalf("current row still renders verbose label:\n%s", currentPlain)
 	}
 }
 
@@ -1870,8 +1878,8 @@ func TestChatGPTStatusUsesMutedStaleStyleAndFourSpaceContinuation(t *testing.T) 
 	}}
 	stale := fresh
 	stale.profileStatuses = map[string]profileStatusView{"chat": {status: status, phase: statusLoading, stale: true}}
-	freshLine := fresh.renderProfileLineWithStatus(itemStyle, "  ", profile, false, fresh.profileColumnWidth())
-	staleLine := stale.renderProfileLineWithStatus(itemStyle, "  ", profile, false, stale.profileColumnWidth())
+	freshLine := fresh.renderProfileLineWithStatus(itemStyle, profile, false, fresh.profileColumnWidth())
+	staleLine := stale.renderProfileLineWithStatus(itemStyle, profile, false, stale.profileColumnWidth())
 	if freshLine == staleLine {
 		t.Fatal("fresh and stale status styling are identical")
 	}

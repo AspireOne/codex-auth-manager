@@ -235,15 +235,13 @@ func (m appModel) renderList() string {
 	lines := make([]string, 0, len(m.profiles)+1)
 	lines = append(lines, m.renderProfileTableHeader(profileColumnWidth))
 	for i, p := range m.profiles {
-		prefix := "  "
 		style := itemStyle
 
 		if i == m.cursor {
-			prefix = headerTitle.Render("»") + " "
 			style = selectedItemStyle
 		}
 
-		lines = append(lines, m.renderProfileLineWithStatus(style, prefix, p, p.Key == m.currentProfileKey, profileColumnWidth))
+		lines = append(lines, m.renderProfileLineWithStatus(style, p, p.Key == m.currentProfileKey, profileColumnWidth))
 	}
 
 	return strings.Join(lines, "\n")
@@ -265,17 +263,17 @@ func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 	return renderProfileColumns(append([]string{base}, append(headings, tableHeaderStyle.Render("Note"))...)...)
 }
 
-func (m appModel) renderProfileLine(style lipgloss.Style, prefix, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
+func (m appModel) renderProfileLine(style lipgloss.Style, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
 	profile := profilemgr.ProfileSummary{Label: label, Note: note, Plan: plan}
-	return m.renderProfileLineWithStatus(style, prefix, profile, isCurrent, profileColumnWidth)
+	return m.renderProfileLineWithStatus(style, profile, isCurrent, profileColumnWidth)
 }
 
-func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, prefix string, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int) string {
+func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int) string {
 	marker := " "
 	if isCurrent {
 		marker = currentTag.Render("●")
 	}
-	base := m.renderProfileCell(style, prefix, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlan(profile.Plan)
+	base := m.renderProfileCell(style, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlan(profile.Plan)
 	separator := profileColumnSeparator.Render(" │ ")
 
 	note := strings.TrimSpace(profile.Note)
@@ -555,24 +553,19 @@ func renderPlan(plan profilemgr.Plan) string {
 	return style.Render(label) + strings.Repeat(" ", planColumnWidth-lipgloss.Width(label))
 }
 
-func (m appModel) renderProfileCell(style lipgloss.Style, prefix, label string, profileColumnWidth int) string {
-	paddingWidth := profileColumnWidth - lipgloss.Width(prefix+label)
+func (m appModel) renderProfileCell(style lipgloss.Style, label string, profileColumnWidth int) string {
+	paddingWidth := profileColumnWidth - lipgloss.Width(label)
 	if paddingWidth < 0 {
 		paddingWidth = 0
 	}
 
-	return style.Render(prefix+label) + strings.Repeat(" ", paddingWidth)
+	return style.Render(label) + strings.Repeat(" ", paddingWidth)
 }
 
 func (m appModel) profileColumnWidth() int {
 	width := 0
-	for i, p := range m.profiles {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "» "
-		}
-
-		lineWidth := lipgloss.Width(prefix + p.Label)
+	for _, p := range m.profiles {
+		lineWidth := lipgloss.Width(p.Label)
 		if lineWidth > width {
 			width = lineWidth
 		}
