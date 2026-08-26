@@ -63,6 +63,12 @@ var (
 				Bold(true).
 				Foreground(accentColor)
 
+	// Windows Terminal renders uncoloured bold text at a brighter intensity.
+	// Preserve its Campbell default foreground while using the bold font face.
+	activeItemStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#CCCCCC"))
+
 	proPlanStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(proColor)

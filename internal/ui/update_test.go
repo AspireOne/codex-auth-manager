@@ -1368,58 +1368,58 @@ func TestRemainingPercentColorGradient(t *testing.T) {
 	}
 }
 
-func TestRenderListHighlightsSelectedEmailWithoutCursor(t *testing.T) {
+func TestRenderListStylesSelectedAndActiveEmailsWithoutCursor(t *testing.T) {
 	m := appModel{
 		width:             80,
 		cursor:            0,
-		currentProfileKey: "work",
+		currentProfileKey: "personal",
 		profiles: []profilemgr.ProfileSummary{
-			{Key: "work", Label: "work", Note: "current note", Plan: profilemgr.PlanPro},
-			{Key: "personal", Label: "personal", Note: "other note", Plan: profilemgr.PlanFree},
+			{Key: "work", Label: "work", Note: "selected note", Plan: profilemgr.PlanPro},
+			{Key: "personal", Label: "personal", Note: "active note", Plan: profilemgr.PlanFree},
 		},
 	}
 
 	rendered := m.renderList()
 	lines := strings.Split(rendered, "\n")
 
-	var currentLine string
-	var otherLine string
+	var selectedLine string
+	var activeLine string
 	for _, line := range lines {
-		if strings.Contains(line, "current note") {
-			currentLine = line
+		if strings.Contains(line, "selected note") {
+			selectedLine = line
 		}
-		if strings.Contains(line, "other note") {
-			otherLine = line
+		if strings.Contains(line, "active note") {
+			activeLine = line
 		}
 	}
 
-	if currentLine == "" || otherLine == "" {
+	if selectedLine == "" || activeLine == "" {
 		t.Fatalf("rendered list missing expected notes:\n%s", rendered)
 	}
 	if strings.Contains(stripANSI(rendered), "»") {
 		t.Fatalf("rendered list still includes cursor marker:\n%s", rendered)
 	}
-	if !strings.Contains(currentLine, selectedItemStyle.Render("work")) {
-		t.Fatalf("selected email is not highlighted:\n%s", currentLine)
+	if !strings.Contains(selectedLine, selectedItemStyle.Render("work")) {
+		t.Fatalf("selected email is not highlighted:\n%s", selectedLine)
 	}
-	if strings.Contains(otherLine, selectedItemStyle.Render("personal")) {
-		t.Fatalf("unselected email is highlighted:\n%s", otherLine)
+	if !strings.HasPrefix(activeLine, "\x1b[1;38;2;204;204;204mpersonal\x1b[m") {
+		t.Fatalf("active email is not bold-only:\n%s", activeLine)
 	}
 
-	currentPlain := stripANSI(currentLine)
-	otherPlain := stripANSI(otherLine)
-	if !strings.HasPrefix(currentPlain, "work") || !strings.HasPrefix(otherPlain, "personal") {
-		t.Fatalf("profile labels do not start in the first column:\n%s\n%s", currentPlain, otherPlain)
+	selectedPlain := stripANSI(selectedLine)
+	activePlain := stripANSI(activeLine)
+	if !strings.HasPrefix(selectedPlain, "work") || !strings.HasPrefix(activePlain, "personal") {
+		t.Fatalf("profile labels do not start in the first column:\n%s\n%s", selectedPlain, activePlain)
 	}
-	currentNoteIdx := strings.Index(currentPlain, "current note")
-	otherNoteIdx := strings.Index(otherPlain, "other note")
-	if currentNoteIdx < 0 || otherNoteIdx < 0 {
+	selectedNoteIdx := strings.Index(selectedPlain, "selected note")
+	activeNoteIdx := strings.Index(activePlain, "active note")
+	if selectedNoteIdx < 0 || activeNoteIdx < 0 {
 		t.Fatalf("rendered list missing expected note positions:\n%s", rendered)
 	}
-	currentIdx := lipgloss.Width(currentPlain[:currentNoteIdx])
-	otherIdx := lipgloss.Width(otherPlain[:otherNoteIdx])
-	if currentIdx != otherIdx {
-		t.Fatalf("notes start at different columns: current=%d other=%d\n%s", currentIdx, otherIdx, rendered)
+	selectedIdx := lipgloss.Width(selectedPlain[:selectedNoteIdx])
+	activeIdx := lipgloss.Width(activePlain[:activeNoteIdx])
+	if selectedIdx != activeIdx {
+		t.Fatalf("notes start at different columns: selected=%d active=%d\n%s", selectedIdx, activeIdx, rendered)
 	}
 }
 

@@ -236,12 +236,17 @@ func (m appModel) renderList() string {
 	lines = append(lines, m.renderProfileTableHeader(profileColumnWidth))
 	for i, p := range m.profiles {
 		style := itemStyle
+		isCurrent := p.Key == m.currentProfileKey
+
+		if isCurrent {
+			style = activeItemStyle
+		}
 
 		if i == m.cursor {
 			style = selectedItemStyle
 		}
 
-		lines = append(lines, m.renderProfileLineWithStatus(style, p, p.Key == m.currentProfileKey, profileColumnWidth))
+		lines = append(lines, m.renderProfileLineWithStatus(style, p, isCurrent, profileColumnWidth))
 	}
 
 	return strings.Join(lines, "\n")
