@@ -107,6 +107,51 @@ func TestRunSelectActivatesProfile(t *testing.T) {
 	}
 }
 
+func TestRunSelectSynchronizesPiAuth(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	profilePath := filepath.Join(home, ".codex", "auth_manager", "profiles", "work")
+	accessToken := cliAccessToken(1_900_000_000)
+	writeCLIChatGPTOAuthFile(t, profilePath, "acct-work", accessToken, "refresh-work")
+	piAuthPath := filepath.Join(home, ".pi", "agent", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(piAuthPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(Pi auth dir): %v", err)
+	}
+	if err := os.WriteFile(piAuthPath, []byte(`{"anthropic":{"type":"api_key","key":"ant"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(Pi auth): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--select", "acct-work@example.com"}, &stdout, &stderr, func() (string, error) {
+		return home, nil
+	}, failUIRun(t))
+	if code != 0 {
+		t.Fatalf("run() code = %d, stderr=%q", code, stderr.String())
+	}
+
+	data, err := os.ReadFile(piAuthPath) // #nosec G304 -- test path is created under t.TempDir().
+	if err != nil {
+		t.Fatalf("ReadFile(Pi auth): %v", err)
+	}
+	var entries map[string]map[string]any
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("Unmarshal(Pi auth): %v", err)
+	}
+	codex, ok := entries["openai-codex"]
+	if !ok {
+		t.Fatal("Pi auth is missing openai-codex entry")
+	}
+	if codex["type"] != "oauth" || codex["access"] != accessToken ||
+		codex["refresh"] != "refresh-work" || codex["accountId"] != "acct-work" ||
+		int64(codex["expires"].(float64)) != 1_900_000_000_000 {
+		t.Fatalf("Pi openai-codex entry = %#v", codex)
+	}
+	if entries["anthropic"]["key"] != "ant" {
+		t.Fatalf("Pi anthropic entry changed: %#v", entries["anthropic"])
+	}
+}
+
 func TestRunLoginAuthenticatesChatGPTProfile(t *testing.T) {
 	home := t.TempDir()
 	writeCLIAuthFile(t, filepath.Join(home, ".codex", "auth_manager", "profiles", "work"), "acct-work")
@@ -356,6 +401,35 @@ func writeCLIAuthFile(t *testing.T, path, accountID string) {
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
+}
+
+func writeCLIChatGPTOAuthFile(t *testing.T, path, accountID, accessToken, refreshToken string) {
+	t.Helper()
+
+	body := map[string]any{
+		"auth_mode": "account",
+		"tokens": map[string]any{
+			"account_id":    accountID,
+			"id_token":      cliIDToken(accountID + "@example.com"),
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+		},
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal auth fixture: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func cliAccessToken(expires int64) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, expires)))
+	return "header." + payload + ".signature"
 }
 
 func cliIDToken(email string) string {

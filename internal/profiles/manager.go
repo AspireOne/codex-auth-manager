@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -127,6 +128,7 @@ type Manager struct {
 	LegacyNotesFile     string
 	InstallationIDsFile string
 	StatusCacheFile     string
+	targets             []AuthTarget
 }
 
 var (
@@ -148,9 +150,13 @@ type profileMetadata struct {
 type authFileData struct {
 	AuthMode     string `json:"auth_mode"`
 	OpenAIAPIKey string `json:"OPENAI_API_KEY"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 	Tokens       struct {
-		AccountID string `json:"account_id"`
-		IDToken   string `json:"id_token"`
+		AccountID    string `json:"account_id"`
+		IDToken      string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
 	} `json:"tokens"`
 }
 
@@ -171,7 +177,7 @@ type currentProfileMarker struct {
 	Identity authIdentity `json:"identity"`
 }
 
-func NewManager(codexDir string) Manager {
+func NewManager(codexDir string, targets ...AuthTarget) Manager {
 	managerDir := filepath.Join(codexDir, "auth_manager")
 	return Manager{
 		AuthFile:            filepath.Join(codexDir, "auth.json"),
@@ -182,6 +188,7 @@ func NewManager(codexDir string) Manager {
 		LegacyNotesFile:     filepath.Join(managerDir, profileNotesFileName),
 		InstallationIDsFile: filepath.Join(managerDir, profileInstallationIDsFileName),
 		StatusCacheFile:     filepath.Join(managerDir, profileStatusCacheFileName),
+		targets:             append([]AuthTarget(nil), targets...),
 	}
 }
 
@@ -310,6 +317,32 @@ func (m Manager) SyncTrackedProfile() error {
 	return m.syncActiveInstallationID(marker)
 }
 
+// SyncCurrentAuthTargets projects the current Codex auth state into all
+// configured targets. Invalid auth is left untouched so a malformed external
+// edit cannot cause a valid target credential to be erased.
+func (m Manager) SyncCurrentAuthTargets() error {
+	if len(m.targets) == 0 {
+		return nil
+	}
+	if !fileExists(m.AuthFile) {
+		return syncAuthTargets(m.targets, nil)
+	}
+
+	descriptor, err := readAuthDescriptor(m.AuthFile)
+	if err != nil {
+		return nil
+	}
+	credentials, err := readAuthCredentials(m.AuthFile, descriptor)
+	if err != nil {
+		return err
+	}
+	return syncAuthTargets(m.targets, &credentials)
+}
+
+func (m Manager) syncCurrentAuthTargetsAfterStateChange() error {
+	return m.SyncCurrentAuthTargets()
+}
+
 func (m Manager) Activate(name string) error {
 	if err := m.SyncTrackedProfile(); err != nil {
 		return err
@@ -329,6 +362,9 @@ func (m Manager) Activate(name string) error {
 	}
 	if err := m.setActiveInstallationIDForProfile(name); err != nil {
 		return fmt.Errorf("%w: activated profile %q, but failed to write installation_id: %v", ErrStateChanged, name, err)
+	}
+	if err := m.syncCurrentAuthTargetsAfterStateChange(); err != nil {
+		return fmt.Errorf("%w: activated profile %q, but failed to synchronize auth targets: %w", ErrStateChanged, name, err)
 	}
 
 	return nil
@@ -384,6 +420,9 @@ func (m Manager) ReplaceAndActivate(name, authPath string) error {
 	if err := m.setActiveInstallationIDForProfile(name); err != nil {
 		return fmt.Errorf("%w: updated and activated profile %q, but failed to write installation_id: %v", ErrStateChanged, name, err)
 	}
+	if err := m.syncCurrentAuthTargetsAfterStateChange(); err != nil {
+		return fmt.Errorf("%w: updated and activated profile %q, but failed to synchronize auth targets: %w", ErrStateChanged, name, err)
+	}
 
 	return nil
 }
@@ -430,6 +469,9 @@ func (m Manager) SaveCurrent(label string) error {
 	if err := m.setActiveInstallationIDForProfile(key); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
 	}
+	if err := m.syncCurrentAuthTargetsAfterStateChange(); err != nil {
+		return fmt.Errorf("%w: saved and activated profile %q, but failed to synchronize auth targets: %w", ErrStateChanged, key, err)
+	}
 	return nil
 }
 
@@ -469,6 +511,9 @@ func (m Manager) Logout() error {
 	}
 	if err := clearInstallationID(m.InstallationIDFile); err != nil {
 		return fmt.Errorf("%w: %w", ErrStateChanged, err)
+	}
+	if err := m.syncCurrentAuthTargetsAfterStateChange(); err != nil {
+		return fmt.Errorf("%w: logged out, but failed to clear auth targets: %w", ErrStateChanged, err)
 	}
 	return nil
 }
@@ -1420,6 +1465,66 @@ func readAuthDescriptor(path string) (authDescriptor, error) {
 		}, nil
 	}
 	return authDescriptor{Identity: identity, Kind: AuthKindAPIKey}, nil
+}
+
+func readAuthCredentials(path string, descriptor authDescriptor) (AuthCredentials, error) {
+	data, err := os.ReadFile(path) // #nosec G304 G703 -- auth/profile paths are derived from the configured Codex directory.
+	if err != nil {
+		return AuthCredentials{}, fmt.Errorf("failed to read auth file %s: %w", path, err)
+	}
+
+	var auth authFileData
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return AuthCredentials{}, fmt.Errorf("failed to parse auth file %s: %w", path, err)
+	}
+
+	credentials := AuthCredentials{
+		Kind:      descriptor.Kind,
+		AccountID: strings.TrimSpace(auth.Tokens.AccountID),
+		APIKey:    strings.TrimSpace(auth.OpenAIAPIKey),
+	}
+	if descriptor.Kind != AuthKindChatGPT {
+		return credentials, nil
+	}
+
+	credentials.AccessToken = strings.TrimSpace(auth.Tokens.AccessToken)
+	if credentials.AccessToken == "" {
+		credentials.AccessToken = strings.TrimSpace(auth.AccessToken)
+	}
+	credentials.RefreshToken = strings.TrimSpace(auth.Tokens.RefreshToken)
+	if credentials.RefreshToken == "" {
+		credentials.RefreshToken = strings.TrimSpace(auth.RefreshToken)
+	}
+	if credentials.AccessToken != "" {
+		// Target implementations validate the material they actually need. A
+		// target may not be installed, in which case incomplete legacy auth
+		// files should remain harmless to the normal Codex workflow.
+		credentials.ExpiresAt, _ = jwtExpiration(credentials.AccessToken)
+	}
+	return credentials, nil
+}
+
+func jwtExpiration(token string) (time.Time, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return time.Time{}, errors.New("invalid JWT format")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid JWT payload: %w", err)
+	}
+	var claims struct {
+		ExpiresAt json.RawMessage `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return time.Time{}, fmt.Errorf("invalid JWT claims: %w", err)
+	}
+	var seconds int64
+	if len(claims.ExpiresAt) == 0 || json.Unmarshal(claims.ExpiresAt, &seconds) != nil || seconds <= 0 {
+		return time.Time{}, errors.New("missing or invalid exp claim")
+	}
+	return time.Unix(seconds, 0).UTC(), nil
 }
 
 func emailFromIDToken(token string) string {

@@ -464,6 +464,11 @@ func (m appModel) cycleSelectedPlan() appModel {
 func (m *appModel) activateProfile(key string) appModel {
 	selected := m.selectedProfile()
 	if err := m.activateSelectedProfile(key); err != nil {
+		if errors.Is(err, profilemgr.ErrStateChanged) {
+			updated := m.reloadAndExitWithError(err)
+			updated.restartRequired = true
+			return updated
+		}
 		m.setError(err.Error())
 		return *m
 	}

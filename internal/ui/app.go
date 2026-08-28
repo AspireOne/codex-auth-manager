@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 
+	"codex-manage/internal/authsync"
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/profilestatus"
 	"codex-manage/internal/reauth"
@@ -149,7 +150,7 @@ func Run(version string) error {
 
 func newAppModel(home string) appModel {
 	codexDir := filepath.Join(home, ".codex")
-	manager := profilemgr.NewManager(codexDir)
+	manager := profilemgr.NewManager(codexDir, authsync.NewPiTarget(home))
 	return appModel{
 		profileManager:    manager,
 		authenticator:     reauth.New(manager),

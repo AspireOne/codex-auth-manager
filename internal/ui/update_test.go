@@ -18,6 +18,7 @@ import (
 
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/profilestatus"
+	"codex-manage/internal/reauth"
 	"codex-manage/internal/updatecheck"
 )
 
@@ -28,6 +29,16 @@ type fakeUIAuthenticator struct {
 type fakeStatusFetcher struct {
 	run func(context.Context, profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error)
 }
+
+type failingAuthTarget struct{}
+
+func (failingAuthTarget) Name() string { return "failing target" }
+
+func (failingAuthTarget) Sync(profilemgr.AuthCredentials) error {
+	return errors.New("target unavailable")
+}
+
+func (failingAuthTarget) Clear() error { return errors.New("target unavailable") }
 
 func (f fakeStatusFetcher) Fetch(ctx context.Context, profile profilemgr.ProfileSummary) (profilemgr.ProfileStatus, error) {
 	return f.run(ctx, profile)
@@ -837,6 +848,41 @@ func TestConfirmingCustomAuthActivationActivatesProfile(t *testing.T) {
 	gotAuth := readTestFile(t, authPath)
 	if string(gotAuth) != string(workAuth) {
 		t.Fatalf("auth.json = %q, want work profile auth", gotAuth)
+	}
+}
+
+func TestActivationReloadsStateAfterAuthTargetFailure(t *testing.T) {
+	home := t.TempDir()
+	profilePath := filepath.Join(home, ".codex", "auth_manager", "profiles", testWorkProfileName)
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll profile dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"auth_mode":"account","tokens":{"account_id":"custom"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile active auth: %v", err)
+	}
+	writeUIOAuthProfile(t, home, testWorkProfileName)
+
+	manager := profilemgr.NewManager(filepath.Join(home, ".codex"), failingAuthTarget{})
+	m := newAppModel(home)
+	m.profileManager = manager
+	m.authenticator = reauth.New(manager)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.cursor = 0
+
+	updatedModel, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	updatedModel, _ = updatedModel.(appModel).Update(tea.KeyPressMsg(tea.Key{Text: "y"}))
+	got := updatedModel.(appModel)
+
+	if got.currentProfileKey != testWorkProfileName {
+		t.Fatalf("currentProfileKey = %q, want %q after target failure", got.currentProfileKey, testWorkProfileName)
+	}
+	if !got.restartRequired {
+		t.Fatal("restartRequired = false, want true after Codex activation")
+	}
+	if !strings.Contains(got.errText, "target unavailable") {
+		t.Fatalf("errText = %q, want target failure", got.errText)
 	}
 }
 
@@ -1916,6 +1962,16 @@ func writeUIProfile(t *testing.T, home, name, accountID string) {
 	}
 	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, name)))
 	body := fmt.Sprintf(`{"auth_mode":"account","tokens":{"account_id":%q,"id_token":%q}}`, accountID, "header."+payload+".signature")
+	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile profile: %v", err)
+	}
+}
+
+func writeUIOAuthProfile(t *testing.T, home, name string) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "auth_manager", "profiles", name)
+	accessPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1900000000}`))
+	body := fmt.Sprintf(`{"auth_mode":"account","tokens":{"account_id":"work","id_token":%q,"access_token":%q,"refresh_token":"refresh-work"}}`, "header."+base64.RawURLEncoding.EncodeToString([]byte(`{"email":"work@example.com"}`))+".signature", "header."+accessPayload+".signature")
 	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile profile: %v", err)
 	}

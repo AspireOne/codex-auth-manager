@@ -9,6 +9,7 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 - save ChatGPT auth automatically under its account identity
 - save API-key auth with an optional label or automatic fingerprint
 - activate another saved profile
+- sync the active ChatGPT account to Pi Agent
 - re-authenticate an existing ChatGPT profile in its own browser session
 - see cached ChatGPT 5-hour, weekly, and optional monthly quota usage,
   reset times, and authentication status
@@ -172,6 +173,20 @@ codex-manage --login matej@example.com
 ```
 
 Or, in the TUI, select a ChatGPT profile and press `a`; press `Esc` to cancel. API-key profiles cannot use this workflow.
+
+## Pi Agent synchronization
+
+When Pi Agent is initialized, activating a ChatGPT profile also updates its
+`openai-codex` credential. The default file is
+`~/.pi/agent/auth.json`; set `PI_CODING_AGENT_DIR` when Pi uses a different
+agent directory. An existing `~/.pi/agents` directory is also recognized for
+installations using that layout. The manager updates only the `openai-codex`
+entry and keeps other Pi provider credentials intact.
+
+Logging out or activating an API-key profile removes the managed
+`openai-codex` entry. If Pi's agent directory does not exist, synchronization
+is skipped. Codex and Pi retain separate refreshable copies of the OAuth
+credential, so avoid refreshing the same account concurrently when possible.
 
 ## Browser-based re-authentication
 

@@ -118,6 +118,43 @@ func TestReconcileStatusCredentialsRejectsConcurrentChange(t *testing.T) {
 	}
 }
 
+func TestReconcileStatusCredentialsProjectsRefreshedActiveCredentials(t *testing.T) {
+	manager := NewManager(filepath.Join(t.TempDir(), ".codex"))
+	target := &recordingAuthTarget{}
+	manager.targets = []AuthTarget{target}
+	profilePath := filepath.Join(manager.ProfileDir, "work")
+	expiresAt := time.Unix(1_900_000_000, 0).UTC()
+	originalMap := oauthAuthFixture("acct", jwtFixture(expiresAt), "refresh-old")
+	refreshedMap := oauthAuthFixture("acct", jwtFixture(expiresAt.Add(time.Hour)), "refresh-new")
+	writeAuthFile(t, profilePath, originalMap)
+	original, err := os.ReadFile(profilePath) // #nosec G304 -- test path is created under t.TempDir().
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAuthFile(t, manager.AuthFile, originalMap)
+	identity, err := readAuthIdentity(manager.AuthFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMarkerFile(t, manager.CurrentProfileFile, currentProfileMarker{Name: "work", Identity: identity})
+	freshPath := filepath.Join(t.TempDir(), "fresh.json")
+	writeAuthFile(t, freshPath, refreshedMap)
+	refreshed, err := os.ReadFile(freshPath) // #nosec G304 -- test path is created under t.TempDir().
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.ReconcileStatusCredentials("work", original, refreshed); err != nil {
+		t.Fatalf("ReconcileStatusCredentials() error = %v", err)
+	}
+	if len(target.synced) != 1 {
+		t.Fatalf("target sync calls = %d, want 1", len(target.synced))
+	}
+	if target.synced[0].RefreshToken != "refresh-new" {
+		t.Fatalf("projected refresh token = %q, want refreshed token", target.synced[0].RefreshToken)
+	}
+}
+
 func TestProfileStatusCacheTreatsCorruptionUnknownSchemaAndReadFailureAsMissing(t *testing.T) {
 	tests := []struct {
 		name  string

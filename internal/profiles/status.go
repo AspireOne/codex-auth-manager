@@ -171,6 +171,9 @@ func (m Manager) ReconcileStatusCredentials(key string, original, refreshed []by
 		if err := writeFileAtomically(m.AuthFile, refreshed, 0o600); err != nil {
 			return fmt.Errorf("%w: refreshed saved credentials, but failed to update active credentials: %v", ErrStateChanged, err)
 		}
+		if err := m.syncCurrentAuthTargetsAfterStateChange(); err != nil {
+			return fmt.Errorf("%w: refreshed saved credentials and active credentials, but failed to synchronize auth targets: %w", ErrStateChanged, err)
+		}
 	}
 	return nil
 }

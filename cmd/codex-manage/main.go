@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"codex-manage/internal/authsync"
 	profilemgr "codex-manage/internal/profiles"
 	"codex-manage/internal/reauth"
 	"codex-manage/internal/ui"
@@ -173,7 +174,7 @@ func newProfileManager(userHomeDir func() (string, error)) (profilemgr.Manager, 
 	if err != nil {
 		return profilemgr.Manager{}, fmt.Errorf("failed to resolve home directory: %w", err)
 	}
-	return profilemgr.NewManager(filepath.Join(home, ".codex")), nil
+	return profilemgr.NewManager(filepath.Join(home, ".codex"), authsync.NewPiTarget(home)), nil
 }
 
 func listProfiles(manager profilemgr.Manager, stdout, stderr io.Writer) error {
