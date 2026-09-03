@@ -128,7 +128,7 @@ type profileStatusView struct {
 	stale  bool
 }
 
-const profileStatusTTL = 30 * time.Minute
+const profileStatusTTL = 10 * time.Minute
 
 func Run(version string) error {
 	home, err := os.UserHomeDir()
