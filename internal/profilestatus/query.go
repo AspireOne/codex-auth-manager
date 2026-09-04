@@ -67,7 +67,8 @@ func (q *Queryer) Fetch(ctx context.Context, profile profilemgr.ProfileSummary) 
 
 type appServerAccount struct {
 	Account *struct {
-		Type string `json:"type"`
+		Type     string  `json:"type"`
+		PlanType *string `json:"planType"`
 	} `json:"account"`
 }
 
@@ -110,7 +111,19 @@ func queryStatus(ctx context.Context, session *codexapp.Session) (profilemgr.Pro
 	if err := session.Request(ctx, "account/rateLimits/read", map[string]any{}, &response); err != nil {
 		return profilemgr.ProfileStatus{}, classifyError(err)
 	}
-	return statusFromRateLimits(response, time.Now().UTC())
+	status, err := statusFromRateLimits(response, time.Now().UTC())
+	if err != nil {
+		return profilemgr.ProfileStatus{}, err
+	}
+	status.PlanType = planTypeFromServer(account.Account.PlanType)
+	return status, nil
+}
+
+func planTypeFromServer(value *string) profilemgr.Plan {
+	if value == nil {
+		return profilemgr.PlanUnknown
+	}
+	return profilemgr.Plan(strings.TrimSpace(*value))
 }
 
 func statusFromRateLimits(response rateLimitsResponse, fetchedAt time.Time) (profilemgr.ProfileStatus, error) {

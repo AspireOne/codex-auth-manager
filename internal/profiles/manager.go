@@ -60,57 +60,45 @@ const (
 	AuthKindAPIKey  AuthKind = "apikey"
 )
 
+// Plan is the opaque planType returned by Codex. Known values are retained as
+// presentation and ordering hints; unknown values remain valid.
 type Plan string
 
 const (
-	PlanFree Plan = "free"
-	PlanPlus Plan = "plus"
-	PlanPro  Plan = "pro"
-	PlanAPI  Plan = "api"
+	PlanUnknown Plan = ""
+	PlanFree    Plan = "free"
+	PlanPlus    Plan = "plus"
+	PlanPro     Plan = "pro"
+	PlanAPI     Plan = "api"
 )
 
 func (p Plan) Label() string {
-	switch p {
-	case PlanPro:
+	switch strings.ToLower(strings.TrimSpace(string(p))) {
+	case string(PlanPro):
 		return "Pro"
-	case PlanPlus:
+	case string(PlanPlus):
 		return "Plus"
-	case PlanFree:
+	case string(PlanFree):
 		return "Free"
-	case PlanAPI:
+	case string(PlanAPI):
 		return "API"
+	case string(PlanUnknown):
+		return "—"
 	default:
-		return "Free"
-	}
-}
-
-func (p Plan) Next() Plan {
-	switch p {
-	case PlanPlus:
-		return PlanPro
-	case PlanPro:
-		return PlanFree
-	case PlanFree:
-		return PlanPlus
-	case PlanAPI:
-		return PlanAPI
-	default:
-		return PlanPlus
+		return strings.TrimSpace(string(p))
 	}
 }
 
 func (p Plan) Rank() int {
-	switch p {
-	case PlanPro:
+	switch strings.ToLower(strings.TrimSpace(string(p))) {
+	case string(PlanPro):
 		return 0
-	case PlanPlus:
+	case string(PlanPlus):
 		return 1
-	case PlanFree:
+	case string(PlanFree):
 		return 2
-	case PlanAPI:
-		return 3
 	default:
-		return 2
+		return 3
 	}
 }
 
@@ -144,7 +132,6 @@ type profileScan struct {
 type profileMetadata struct {
 	Label string `json:"label,omitempty"`
 	Note  string `json:"note,omitempty"`
-	Plan  Plan   `json:"plan,omitempty"`
 }
 
 type authFileData struct {
@@ -542,38 +529,6 @@ func (m Manager) SetNote(name, note string) error {
 	return writeProfileMetadata(m.MetadataFile, metadata)
 }
 
-func (m Manager) SetPlan(name string, plan Plan) error {
-	if strings.TrimSpace(name) == "" {
-		return errors.New("missing profile name")
-	}
-	path := filepath.Join(m.ProfileDir, name)
-	if !fileExists(path) {
-		return fmt.Errorf("profile %q not found", name)
-	}
-	if err := validatePlan(plan); err != nil {
-		return err
-	}
-	descriptor, err := readAuthDescriptor(path)
-	if err != nil {
-		return fmt.Errorf("failed to read profile %q: %w", name, err)
-	}
-	if descriptor.Kind == AuthKindAPIKey && plan != PlanAPI {
-		return errors.New("API-key profiles always use the API plan")
-	}
-	if descriptor.Kind == AuthKindChatGPT && plan == PlanAPI {
-		return errors.New("the API plan is only available to API-key profiles")
-	}
-
-	metadata, err := m.loadProfileMetadata()
-	if err != nil {
-		return err
-	}
-	entry := metadata[name]
-	entry.Plan = plan
-	metadata[name] = entry
-	return writeProfileMetadata(m.MetadataFile, metadata)
-}
-
 func (m Manager) SetLabel(key, label string) error {
 	if strings.TrimSpace(key) == "" {
 		return errors.New("missing profile key")
@@ -822,7 +777,7 @@ func applyProfileMetadata(profiles []ProfileSummary, metadata map[string]profile
 	for i := range profiles {
 		entry := metadata[profiles[i].Key]
 		profiles[i].Note = entry.Note
-		profiles[i].Plan = planForProfile(profiles[i].Kind, entry.Plan)
+		profiles[i].Plan = planForProfile(profiles[i].Kind)
 		if profiles[i].Kind == AuthKindAPIKey {
 			profiles[i].CustomLabel = entry.Label
 		}
@@ -831,11 +786,11 @@ func applyProfileMetadata(profiles []ProfileSummary, metadata map[string]profile
 	resolveProfileLabels(profiles)
 }
 
-func planForProfile(kind AuthKind, plan Plan) Plan {
+func planForProfile(kind AuthKind) Plan {
 	if kind == AuthKindAPIKey {
 		return PlanAPI
 	}
-	return normalizedPlan(plan)
+	return PlanUnknown
 }
 
 func profileByKey(profiles []ProfileSummary, key string) *ProfileSummary {
@@ -979,7 +934,7 @@ func (m Manager) loadProfileMetadata() (map[string]profileMetadata, error) {
 	}
 	metadata := make(map[string]profileMetadata, len(notes))
 	for name, note := range notes {
-		metadata[name] = profileMetadata{Note: note, Plan: PlanFree}
+		metadata[name] = profileMetadata{Note: note}
 	}
 	if err := writeProfileMetadata(m.MetadataFile, metadata); err != nil {
 		return nil, fmt.Errorf("failed to migrate profile notes: %w", err)
@@ -1060,16 +1015,11 @@ func readProfileMetadata(path string) (map[string]profileMetadata, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
 		}
-		if entry.Plan != "" {
-			if err := validatePlan(entry.Plan); err != nil {
-				return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
-			}
-		}
 		label, err := validateProfileLabel(entry.Label)
 		if err != nil {
 			return nil, fmt.Errorf("invalid metadata for profile %q: %w", name, err)
 		}
-		cleaned[name] = profileMetadata{Label: label, Note: note, Plan: normalizedPlan(entry.Plan)}
+		cleaned[name] = profileMetadata{Label: label, Note: note}
 	}
 	return cleaned, nil
 }
@@ -1084,21 +1034,14 @@ func writeProfileMetadata(path string, metadata map[string]profileMetadata) erro
 		if err != nil {
 			return err
 		}
-		plan := normalizedPlan(entry.Plan)
-		if err := validatePlan(plan); err != nil {
-			return err
-		}
 		label, err := validateProfileLabel(entry.Label)
 		if err != nil {
 			return err
 		}
-		if label == "" && note == "" && plan == PlanFree {
+		if label == "" && note == "" {
 			continue
 		}
-		if plan == PlanFree {
-			plan = ""
-		}
-		filtered[name] = profileMetadata{Label: label, Note: note, Plan: plan}
+		filtered[name] = profileMetadata{Label: label, Note: note}
 	}
 
 	if len(filtered) == 0 {
@@ -1288,22 +1231,6 @@ func validateLabelForAuth(kind AuthKind, label string) (string, error) {
 		return "", errors.New("ChatGPT profile labels come from the account email")
 	}
 	return label, nil
-}
-
-func validatePlan(plan Plan) error {
-	switch plan {
-	case PlanFree, PlanPlus, PlanPro, PlanAPI:
-		return nil
-	default:
-		return fmt.Errorf("invalid profile plan %q; use free, plus, pro, or api", plan)
-	}
-}
-
-func normalizedPlan(plan Plan) Plan {
-	if plan == "" {
-		return PlanFree
-	}
-	return plan
 }
 
 func deleteProfile(profileDir, name string) error {

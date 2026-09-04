@@ -13,7 +13,7 @@ It keeps saved profiles next to your local Codex config (`~/.codex/auth.json` on
 - re-authenticate an existing ChatGPT profile in its own browser session
 - see cached ChatGPT 5-hour, weekly, and optional monthly quota usage,
   reset times, and authentication status
-- assign Free, Plus, or Pro plans to ChatGPT profiles, with paid plans grouped first
+- see the plan type reported by Codex, with paid plans grouped first
 - identify API-key profiles with a distinct API plan
 - add a short note to a profile for quick context
 - edit API-key labels or delete saved profiles
@@ -202,10 +202,14 @@ Brave, Chromium, Chrome, and Edge are supported. If needed, choose the browser o
 
 The profile list shows each ChatGPT account's available quota windows
 (5-hour, weekly, and optional monthly), remaining percentage, reset time,
-and combined fetch state at a glance. The state shows a question mark while
+plan type, and combined fetch state at a glance. Plan types come directly from
+Codex's app-server and are cached with the quota status; missing or unavailable
+values are shown as `—`, and future server plan values remain supported. The
+state shows a question mark while
 loading, a check mark for usable fetched or cached data, and a cross when
 fetching or authentication fails. The active profile header also shows
 `Cached`, `Loading`, or `Failed` together with the last successful refresh
 time; it shows `never` until a successful refresh exists. Usage details are
 refreshed automatically and reused briefly, keeping profile switching fast;
-windows that Codex does not return are omitted.
+press `Ctrl+R` to force a refresh. Windows that Codex does not return are
+omitted.

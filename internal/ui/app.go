@@ -192,27 +192,13 @@ func (m appModel) Init() tea.Cmd {
 }
 
 func (m *appModel) reload() error {
+	selectedKey := m.selectedProfileKey()
 	snapshot, err := m.profileManager.Snapshot()
 	if err != nil {
 		return err
 	}
 	m.profiles = snapshot.Profiles
-	sort.SliceStable(m.profiles, func(i, j int) bool {
-		if m.profiles[i].Kind != m.profiles[j].Kind {
-			return m.profiles[i].Kind != profilemgr.AuthKindAPIKey
-		}
-		if m.profiles[i].Plan.Rank() != m.profiles[j].Plan.Rank() {
-			return m.profiles[i].Plan.Rank() < m.profiles[j].Plan.Rank()
-		}
-		return m.profiles[i].Label < m.profiles[j].Label
-	})
 	m.invalidProfiles = snapshot.InvalidProfiles
-
-	if len(m.profiles) == 0 {
-		m.cursor = 0
-	} else if m.cursor >= len(m.profiles) {
-		m.cursor = len(m.profiles) - 1
-	}
 
 	m.authActive = snapshot.AuthActive
 	m.currentProfileKey = snapshot.CurrentProfileKey
@@ -245,6 +231,12 @@ func (m *appModel) reload() error {
 		status, exists := cached[profile.Key]
 		fresh := exists && m.now().Sub(status.FetchedAt) < profileStatusTTL
 		if exists {
+			if status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
+				profileIndex := indexOfProfile(m.profiles, profile.Key)
+				if profileIndex >= 0 {
+					m.profiles[profileIndex].Plan = status.PlanType
+				}
+			}
 			copy := status
 			phase := statusCached
 			if !fresh {
@@ -265,7 +257,32 @@ func (m *appModel) reload() error {
 			delete(m.profileStatuses, key)
 		}
 	}
+	m.sortProfiles(selectedKey)
 	return nil
+}
+
+func (m *appModel) sortProfiles(selectedKey string) {
+	sort.SliceStable(m.profiles, func(i, j int) bool {
+		if m.profiles[i].Kind != m.profiles[j].Kind {
+			return m.profiles[i].Kind != profilemgr.AuthKindAPIKey
+		}
+		if m.profiles[i].Plan.Rank() != m.profiles[j].Plan.Rank() {
+			return m.profiles[i].Plan.Rank() < m.profiles[j].Plan.Rank()
+		}
+		return m.profiles[i].Label < m.profiles[j].Label
+	})
+
+	if selectedKey != "" {
+		if index := indexOfProfile(m.profiles, selectedKey); index >= 0 {
+			m.cursor = index
+			return
+		}
+	}
+	if len(m.profiles) == 0 {
+		m.cursor = 0
+	} else if m.cursor >= len(m.profiles) {
+		m.cursor = len(m.profiles) - 1
+	}
 }
 
 func (m appModel) statusFetchCmd(ctx context.Context, epoch int, profile profilemgr.ProfileSummary) tea.Cmd {

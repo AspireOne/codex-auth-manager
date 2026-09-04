@@ -82,6 +82,9 @@ var (
 	apiPlanStyle = lipgloss.NewStyle().
 			Foreground(apiColor)
 
+	unknownPlanStyle = lipgloss.NewStyle().
+				Foreground(mutedColor)
+
 	footerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 

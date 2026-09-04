@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -232,8 +233,9 @@ func (m appModel) renderList() string {
 	}
 
 	profileColumnWidth := m.profileColumnWidth()
+	planColumnWidth := m.planColumnWidth()
 	lines := make([]string, 0, len(m.profiles)+1)
-	lines = append(lines, m.renderProfileTableHeader(profileColumnWidth))
+	lines = append(lines, m.renderProfileTableHeader(profileColumnWidth, planColumnWidth))
 	for i, p := range m.profiles {
 		style := itemStyle
 		isCurrent := p.Key == m.currentProfileKey
@@ -246,15 +248,16 @@ func (m appModel) renderList() string {
 			style = selectedItemStyle
 		}
 
-		lines = append(lines, m.renderProfileLineWithStatus(style, p, isCurrent, profileColumnWidth))
+		lines = append(lines, m.renderProfileLineWithStatus(style, p, isCurrent, profileColumnWidth, planColumnWidth))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
+func (m appModel) renderProfileTableHeader(profileColumnWidth, planColumnWidth int) string {
 	profile := tableHeaderStyle.Render("Profile") + strings.Repeat(" ", max(0, profileColumnWidth-lipgloss.Width("Profile")))
-	base := profile + "    " + tableHeaderStyle.Render("Plan")
+	plan := tableHeaderStyle.Render("Plan") + strings.Repeat(" ", max(0, planColumnWidth-lipgloss.Width("Plan")))
+	base := profile + "    " + plan
 	headings := []string{"Limits", stateColumnHeading}
 	widths := m.profileStatusColumnWidths()
 	for i, heading := range headings {
@@ -270,15 +273,19 @@ func (m appModel) renderProfileTableHeader(profileColumnWidth int) string {
 
 func (m appModel) renderProfileLine(style lipgloss.Style, label, note string, plan profilemgr.Plan, isCurrent bool, profileColumnWidth int) string {
 	profile := profilemgr.ProfileSummary{Label: label, Note: note, Plan: plan}
-	return m.renderProfileLineWithStatus(style, profile, isCurrent, profileColumnWidth)
+	return m.renderProfileLineWithStatus(style, profile, isCurrent, profileColumnWidth, m.planColumnWidth())
 }
 
-func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int) string {
+func (m appModel) renderProfileLineWithStatus(style lipgloss.Style, profile profilemgr.ProfileSummary, isCurrent bool, profileColumnWidth int, planColumnWidths ...int) string {
+	planColumnWidth := m.planColumnWidth()
+	if len(planColumnWidths) > 0 {
+		planColumnWidth = planColumnWidths[0]
+	}
 	marker := " "
 	if isCurrent {
 		marker = currentTag.Render("●")
 	}
-	base := m.renderProfileCell(style, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlan(profile.Plan)
+	base := m.renderProfileCell(style, profile.Label, profileColumnWidth) + " " + marker + "  " + renderPlanCell(profile.Plan, planColumnWidth)
 	separator := profileColumnSeparator.Render(" │ ")
 
 	note := strings.TrimSpace(profile.Note)
@@ -541,21 +548,40 @@ func renderProfileColumns(columns ...string) string {
 }
 
 func renderPlan(plan profilemgr.Plan) string {
-	const planColumnWidth = 4
+	return renderPlanCell(plan, 4)
+}
 
-	label := plan.Label()
-	style := freePlanStyle
-	switch plan {
-	case profilemgr.PlanPro:
+func renderPlanCell(plan profilemgr.Plan, planColumnWidth int) string {
+	label := renderedPlanLabel(plan)
+	style := unknownPlanStyle
+	switch strings.ToLower(strings.TrimSpace(string(plan))) {
+	case string(profilemgr.PlanPro):
 		style = proPlanStyle
-	case profilemgr.PlanPlus:
+	case string(profilemgr.PlanPlus):
 		style = plusPlanStyle
-	case profilemgr.PlanFree:
+	case string(profilemgr.PlanFree):
 		style = freePlanStyle
-	case profilemgr.PlanAPI:
+	case string(profilemgr.PlanAPI):
 		style = apiPlanStyle
 	}
-	return style.Render(label) + strings.Repeat(" ", planColumnWidth-lipgloss.Width(label))
+	return style.Render(label) + strings.Repeat(" ", max(0, planColumnWidth-lipgloss.Width(label)))
+}
+
+func renderedPlanLabel(plan profilemgr.Plan) string {
+	label := plan.Label()
+	if label == "—" {
+		return label
+	}
+	label = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, label)
+	if strings.TrimSpace(label) == "" {
+		return "—"
+	}
+	return label
 }
 
 func (m appModel) renderProfileCell(style lipgloss.Style, label string, profileColumnWidth int) string {
@@ -574,6 +600,14 @@ func (m appModel) profileColumnWidth() int {
 		if lineWidth > width {
 			width = lineWidth
 		}
+	}
+	return width
+}
+
+func (m appModel) planColumnWidth() int {
+	width := lipgloss.Width("Plan")
+	for _, p := range m.profiles {
+		width = max(width, lipgloss.Width(renderedPlanLabel(p.Plan)))
 	}
 	return width
 }
@@ -643,7 +677,6 @@ func (m appModel) renderFooter() string {
 			{"UI", []string{
 				formatKeyHint("↑/↓", "move"),
 				formatKeyHint("enter", "activate"),
-				formatKeyHint("p", "cycle plan"),
 			}},
 			{"Manage", profileCommands},
 			{"Global", []string{

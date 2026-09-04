@@ -181,6 +181,20 @@ func TestClassifyErrorOnlyMapsExplicitAuthenticationFailures(t *testing.T) {
 	}
 }
 
+func TestPlanTypeFromServerTreatsMissingAndWhitespaceAsUnknown(t *testing.T) {
+	value := "  business  "
+	if got := planTypeFromServer(&value); got != profilemgr.Plan("business") {
+		t.Fatalf("planTypeFromServer() = %q, want business", got)
+	}
+	empty := "  "
+	if got := planTypeFromServer(&empty); got != profilemgr.PlanUnknown {
+		t.Fatalf("planTypeFromServer(whitespace) = %q, want unknown", got)
+	}
+	if got := planTypeFromServer(nil); got != profilemgr.PlanUnknown {
+		t.Fatalf("planTypeFromServer(nil) = %q, want unknown", got)
+	}
+}
+
 func TestQueryerFetchEndToEnd(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -188,12 +202,16 @@ func TestQueryerFetchEndToEnd(t *testing.T) {
 		wantPercent   int
 		wantQuotas    int
 		wantMonthly   bool
+		wantPlan      profilemgr.Plan
 		wantSignIn    bool
 		wantErrorText string
 	}{
-		{name: "all returned windows", scenario: "success", wantPercent: 36, wantQuotas: 2},
-		{name: "compatible fallback", scenario: "fallback", wantPercent: 24, wantQuotas: 1},
-		{name: "optional monthly limit", scenario: "monthly", wantPercent: 80, wantQuotas: 2, wantMonthly: true},
+		{name: "all returned windows", scenario: "success", wantPercent: 36, wantQuotas: 2, wantPlan: profilemgr.Plan("plus")},
+		{name: "compatible fallback", scenario: "fallback", wantPercent: 24, wantQuotas: 1, wantPlan: profilemgr.Plan("plus")},
+		{name: "optional monthly limit", scenario: "monthly", wantPercent: 80, wantQuotas: 2, wantMonthly: true, wantPlan: profilemgr.Plan("plus")},
+		{name: "future server plan", scenario: "future-plan", wantPercent: 36, wantQuotas: 2, wantPlan: profilemgr.Plan("business")},
+		{name: "missing server plan", scenario: "missing-plan", wantPercent: 36, wantQuotas: 2, wantPlan: profilemgr.PlanUnknown},
+		{name: "null server plan", scenario: "null-plan", wantPercent: 36, wantQuotas: 2, wantPlan: profilemgr.PlanUnknown},
 		{name: "account requires auth", scenario: "signed-out", wantSignIn: true},
 		{name: "non ChatGPT account", scenario: "api-account", wantSignIn: true},
 		{name: "explicit RPC auth rejection", scenario: "auth-rejected", wantSignIn: true},
@@ -221,7 +239,7 @@ func TestQueryerFetchEndToEnd(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if status.UsedPercent == nil || *status.UsedPercent != test.wantPercent || status.ResetsAt == nil || len(status.Quotas) != test.wantQuotas || (test.wantMonthly && !status.Quotas[len(status.Quotas)-1].Monthly) {
+				if status.UsedPercent == nil || *status.UsedPercent != test.wantPercent || status.ResetsAt == nil || len(status.Quotas) != test.wantQuotas || (test.wantMonthly && !status.Quotas[len(status.Quotas)-1].Monthly) || status.PlanType != test.wantPlan {
 					t.Fatalf("status = %#v, want %d%% with reset and %d quota(s)", status, test.wantPercent, test.wantQuotas)
 				}
 			}
@@ -398,6 +416,12 @@ func TestStatusHelperProcess(t *testing.T) {
 				fmt.Printf(`{"id":%d,"result":{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}}`+"\n", request.ID)
 			case "auth-rejected":
 				fmt.Printf(`{"id":%d,"error":{"code":-32000,"message":"ChatGPT authentication required"}}`+"\n", request.ID)
+			case "missing-plan":
+				fmt.Printf(`{"id":%d,"result":{"account":{"type":"chatgpt","email":"test@example.com"},"requiresOpenaiAuth":true}}`+"\n", request.ID)
+			case "null-plan":
+				fmt.Printf(`{"id":%d,"result":{"account":{"type":"chatgpt","email":"test@example.com","planType":null},"requiresOpenaiAuth":true}}`+"\n", request.ID)
+			case "future-plan":
+				fmt.Printf(`{"id":%d,"result":{"account":{"type":"chatgpt","email":"test@example.com","planType":"business"},"requiresOpenaiAuth":true}}`+"\n", request.ID)
 			default:
 				if scenario == "refresh" {
 					_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), statusTestAuth("acct", "new"), 0o600) // #nosec G703 -- test-controlled temp path.

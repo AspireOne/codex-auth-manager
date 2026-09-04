@@ -1476,13 +1476,16 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 	writeUIProfile(t, home, "a-plus", "acct-plus-a")
 	writeUIProfile(t, home, "a-free", "acct-free")
 	writeUIAPIProfile(t, home, "api-free")
-	writeUIMetadata(t, home, `{
-  "z-pro": {"plan": "pro"},
-  "z-plus": {"plan": "plus"},
-  "a-plus": {"plan": "plus"}
-}`)
 
 	m := newAppModel(home)
+	for key, plan := range map[string]profilemgr.Plan{
+		"z-pro":  profilemgr.PlanPro,
+		"z-plus": profilemgr.PlanPlus,
+		"a-plus": profilemgr.PlanPlus,
+		"a-free": profilemgr.PlanFree,
+	} {
+		saveUIPlanStatus(t, m, key, plan)
+	}
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -1498,9 +1501,101 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 	}
 }
 
-func TestCyclePlanLeavesAPIKeyOnAPIPlan(t *testing.T) {
+func TestStatusFetchUpdatesPlanAndPreservesSelection(t *testing.T) {
 	home := t.TempDir()
-	writeUIAPIProfile(t, home, "api")
+	writeUIProfile(t, home, "alpha@example.com", "acct-alpha")
+	writeUIProfile(t, home, "zeta@example.com", "acct-zeta")
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.cursor = indexOfProfile(m.profiles, "zeta@example.com")
+	m.statusQueue = nil
+	selectedKey := m.selectedProfileKey()
+	percent, reset := 20, m.now().Add(time.Hour)
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
+		profileKey: selectedKey,
+		epoch:      m.statusEpoch,
+		status: profilemgr.ProfileStatus{
+			FetchedAt: m.now(), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+			PlanType: profilemgr.PlanPro, UsedPercent: &percent, ResetsAt: &reset,
+		},
+	})
+	got := updated.(appModel)
+	if got.selectedProfileKey() != selectedKey || got.cursor != 0 {
+		t.Fatalf("selection after plan reorder = %q at %d, want %q at 0", got.selectedProfileKey(), got.cursor, selectedKey)
+	}
+	if got.profiles[0].Plan != profilemgr.PlanPro {
+		t.Fatalf("updated plan = %q, want %q", got.profiles[0].Plan, profilemgr.PlanPro)
+	}
+}
+
+func TestMissingServerPlanClearsPreviousPlan(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.profiles[0].Plan = profilemgr.PlanPro
+	m.statusQueue = nil
+	percent := 10
+	reset := m.now().Add(time.Hour)
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
+		profileKey: m.profiles[0].Key,
+		epoch:      m.statusEpoch,
+		status: profilemgr.ProfileStatus{
+			FetchedAt: m.now(), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+			PlanType:    profilemgr.PlanUnknown,
+			UsedPercent: &percent, ResetsAt: &reset,
+		},
+	})
+	got := updated.(appModel)
+	if got.profiles[0].Plan != profilemgr.PlanUnknown {
+		t.Fatalf("plan after missing server value = %q, want unknown", got.profiles[0].Plan)
+	}
+}
+
+func TestFailedStatusFetchRetainsCachedPlan(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.profiles[0].Plan = profilemgr.PlanPlus
+	m.statusQueue = nil
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
+		profileKey: m.profiles[0].Key, epoch: m.statusEpoch, err: errors.New("backend unavailable"),
+	})
+	got := updated.(appModel)
+	if got.profiles[0].Plan != profilemgr.PlanPlus {
+		t.Fatalf("plan after failed refresh = %q, want retained Plus", got.profiles[0].Plan)
+	}
+}
+
+func TestSignInRequiredClearsPlan(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	m := newAppModel(home)
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.profiles[0].Plan = profilemgr.PlanPro
+	m.statusQueue = nil
+	key := m.profiles[0].Key
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
+		profileKey: key, epoch: m.statusEpoch, err: profilestatus.ErrSignInRequired,
+	})
+	got := updated.(appModel)
+	if got.profiles[0].Plan != profilemgr.PlanUnknown {
+		t.Fatalf("plan after sign-in required = %q, want unknown", got.profiles[0].Plan)
+	}
+}
+
+func TestPlanIsNotManuallyEditable(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
 
 	m := newAppModel(home)
 	if err := m.reload(); err != nil {
@@ -1509,57 +1604,30 @@ func TestCyclePlanLeavesAPIKeyOnAPIPlan(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "p"}))
 	m = updated.(appModel)
-	if got := m.selectedProfile().Plan; got != profilemgr.PlanAPI {
-		t.Fatalf("selected profile plan = %q, want %q", got, profilemgr.PlanAPI)
+	if got := m.selectedProfile().Plan; got != profilemgr.PlanUnknown {
+		t.Fatalf("selected profile plan = %q, want unknown", got)
 	}
-	if !strings.Contains(m.status, "API-key profiles use the API plan") {
-		t.Fatalf("status = %q, want API plan explanation", m.status)
-	}
-}
-
-func TestCyclePlanReordersAndKeepsSelectedProfile(t *testing.T) {
-	home := t.TempDir()
-	writeUIProfile(t, home, "a-free", "acct-free")
-	writeUIProfile(t, home, "z-plus", "acct-plus")
-	writeUIMetadata(t, home, `{"z-plus":{"plan":"plus"}}`)
-
-	m := newAppModel(home)
-	if err := m.reload(); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	m.cursor = indexOfProfile(m.profiles, "a-free")
-
-	for _, want := range []struct {
-		plan   profilemgr.Plan
-		cursor int
-	}{
-		{profilemgr.PlanPlus, 0},
-		{profilemgr.PlanPro, 0},
-		{profilemgr.PlanFree, 1},
-	} {
-		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "p"}))
-		m = updated.(appModel)
-		if got := m.selectedProfile(); got.Key != "a-free" || got.Plan != want.plan {
-			t.Fatalf("selected profile = %#v, want a-free with plan %q", got, want.plan)
-		}
-		if m.cursor != want.cursor {
-			t.Fatalf("cursor = %d, want %d after cycling to %q", m.cursor, want.cursor, want.plan)
-		}
+	if m.status != "Ready." {
+		t.Fatalf("status = %q, want unchanged status", m.status)
 	}
 }
 
 func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 	rendered := map[profilemgr.Plan]string{
-		profilemgr.PlanFree: renderPlan(profilemgr.PlanFree),
-		profilemgr.PlanPlus: renderPlan(profilemgr.PlanPlus),
-		profilemgr.PlanPro:  renderPlan(profilemgr.PlanPro),
-		profilemgr.PlanAPI:  renderPlan(profilemgr.PlanAPI),
+		profilemgr.PlanFree:         renderPlan(profilemgr.PlanFree),
+		profilemgr.PlanPlus:         renderPlan(profilemgr.PlanPlus),
+		profilemgr.PlanPro:          renderPlan(profilemgr.PlanPro),
+		profilemgr.PlanAPI:          renderPlan(profilemgr.PlanAPI),
+		profilemgr.PlanUnknown:      renderPlan(profilemgr.PlanUnknown),
+		profilemgr.Plan("business"): renderPlan(profilemgr.Plan("business")),
 	}
 	for plan, want := range map[profilemgr.Plan]string{
-		profilemgr.PlanFree: "Free",
-		profilemgr.PlanPlus: "Plus",
-		profilemgr.PlanPro:  "Pro",
-		profilemgr.PlanAPI:  "API",
+		profilemgr.PlanFree:         "Free",
+		profilemgr.PlanPlus:         "Plus",
+		profilemgr.PlanPro:          "Pro",
+		profilemgr.PlanAPI:          "API",
+		profilemgr.PlanUnknown:      "—",
+		profilemgr.Plan("business"): "business",
 	} {
 		if got := strings.TrimSpace(stripANSI(rendered[plan])); got != want {
 			t.Fatalf("renderPlan(%q) = %q, want %q", plan, got, want)
@@ -1570,10 +1638,10 @@ func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 	}
 }
 
-func TestFooterIncludesCyclePlanHint(t *testing.T) {
+func TestFooterOmitsManualPlanHint(t *testing.T) {
 	footer := stripANSI(appModel{mode: modeNormal}.renderFooter())
-	if !strings.Contains(footer, "p cycle plan") {
-		t.Fatalf("footer missing plan hint: %q", footer)
+	if strings.Contains(footer, "cycle plan") {
+		t.Fatalf("footer unexpectedly exposes manual plan editing: %q", footer)
 	}
 	for _, line := range strings.Split(footer, "\n") {
 		if got := lipgloss.Width(line); got > 80 {
@@ -1967,6 +2035,19 @@ func writeUIProfile(t *testing.T, home, name, accountID string) {
 	}
 }
 
+func saveUIPlanStatus(t *testing.T, m appModel, key string, plan profilemgr.Plan) {
+	t.Helper()
+	now := time.Now().UTC()
+	percent := 20
+	reset := now.Add(time.Hour)
+	if err := m.profileManager.SaveProfileStatus(key, profilemgr.ProfileStatus{
+		FetchedAt: now, AuthStatus: profilemgr.ProfileAuthAuthenticated,
+		PlanType: plan, UsedPercent: &percent, ResetsAt: &reset,
+	}); err != nil {
+		t.Fatalf("SaveProfileStatus(%q): %v", key, err)
+	}
+}
+
 func writeUIOAuthProfile(t *testing.T, home, name string) {
 	t.Helper()
 	path := filepath.Join(home, ".codex", "auth_manager", "profiles", name)
@@ -1992,14 +2073,6 @@ func uiChatGPTAuth(accountID, email string) []byte {
 	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":%q}`, email)))
 	body := fmt.Sprintf(`{"auth_mode":"chatgpt","tokens":{"account_id":%q,"id_token":%q}}`, accountID, "header."+payload+".signature")
 	return []byte(body + "\n")
-}
-
-func writeUIMetadata(t *testing.T, home, body string) {
-	t.Helper()
-	path := filepath.Join(home, ".codex", "auth_manager", ".profile-metadata.json")
-	if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile metadata: %v", err)
-	}
 }
 
 func readTestFile(t *testing.T, path string) []byte {

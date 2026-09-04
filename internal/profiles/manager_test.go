@@ -798,8 +798,8 @@ func TestManagerSetNotePersistsAndSnapshotReturnsIt(t *testing.T) {
 	if got := snapshot.Profiles[0].Note; got != "Plus trial ends soon" {
 		t.Fatalf("snapshot note = %q, want %q", got, "Plus trial ends soon")
 	}
-	if got := snapshot.Profiles[0].Plan; got != PlanFree {
-		t.Fatalf("snapshot plan = %q, want %q", got, PlanFree)
+	if got := snapshot.Profiles[0].Plan; got != PlanUnknown {
+		t.Fatalf("snapshot plan = %q, want unknown", got)
 	}
 }
 
@@ -817,8 +817,8 @@ func TestManagerSnapshotMigratesLegacyNotes(t *testing.T) {
 	if got := snapshot.Profiles[0].Note; got != "Plus trial ends soon" {
 		t.Fatalf("snapshot note = %q, want migrated note", got)
 	}
-	if got := snapshot.Profiles[0].Plan; got != PlanFree {
-		t.Fatalf("snapshot plan = %q, want %q", got, PlanFree)
+	if got := snapshot.Profiles[0].Plan; got != PlanUnknown {
+		t.Fatalf("snapshot plan = %q, want unknown", got)
 	}
 	assertFileMissing(t, paths.legacyNotesFile)
 	assertFileExists(t, paths.metadataFile)
@@ -861,70 +861,20 @@ func TestManagerSetNoteRejectsLongValues(t *testing.T) {
 	}
 }
 
-func TestManagerSetPlanPersistsAndPreservesNote(t *testing.T) {
+func TestManagerSnapshotIgnoresLegacyManualPlan(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
-	if err := m.SetNote("work", "ends soon"); err != nil {
-		t.Fatalf("SetNote() error = %v", err)
-	}
-	if err := m.SetPlan("work", PlanPlus); err != nil {
-		t.Fatalf("SetPlan() error = %v", err)
+	if err := os.WriteFile(paths.metadataFile, []byte(`{"work":{"note":"kept","plan":"enterprise"}}
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile metadata: %v", err)
 	}
 
 	snapshot, err := m.Snapshot()
 	if err != nil {
 		t.Fatalf("Snapshot() error = %v", err)
 	}
-	if got := snapshot.Profiles[0]; got.Note != "ends soon" || got.Plan != PlanPlus {
-		t.Fatalf("profile = %#v, want preserved note and Plus plan", got)
-	}
-
-	if err := m.SetNote("work", "updated"); err != nil {
-		t.Fatalf("SetNote() error = %v", err)
-	}
-	snapshot, err = m.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	if got := snapshot.Profiles[0]; got.Note != "updated" || got.Plan != PlanPlus {
-		t.Fatalf("profile = %#v, want updated note and preserved Plus plan", got)
-	}
-
-	if err := m.SetNote("work", ""); err != nil {
-		t.Fatalf("SetNote(clear) error = %v", err)
-	}
-	snapshot, err = m.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	if got := snapshot.Profiles[0]; got.Note != "" || got.Plan != PlanPlus {
-		t.Fatalf("profile = %#v, want cleared note and preserved Plus plan", got)
-	}
-}
-
-func TestManagerSetPlanRejectsInvalidValue(t *testing.T) {
-	m, paths := newTestManager(t)
-	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
-
-	err := m.SetPlan("work", Plan("enterprise"))
-	if err == nil || !strings.Contains(err.Error(), "invalid profile plan") {
-		t.Fatalf("SetPlan() error = %v, want invalid plan error", err)
-	}
-}
-
-func TestManagerSetPlanRestrictsAPIPlanToAPIKeyProfiles(t *testing.T) {
-	m, paths := newTestManager(t)
-	writeAuthFile(t, filepath.Join(paths.profileDir, "chat"), authFixture("account-chat", "api-chat"))
-	writeAuthFile(t, filepath.Join(paths.profileDir, "api"), apiKeyAuthFixture("sk-api"))
-
-	if err := m.SetPlan("chat", PlanAPI); err == nil || !strings.Contains(err.Error(), "only available") {
-		t.Fatalf("SetPlan(chat, API) error = %v, want API plan restriction", err)
-	}
-	if err := m.SetPlan("api", PlanFree); err == nil || !strings.Contains(err.Error(), "always use") {
-		t.Fatalf("SetPlan(api, Free) error = %v, want API plan restriction", err)
-	}
-	if err := m.SetPlan("api", PlanAPI); err != nil {
-		t.Fatalf("SetPlan(api, API) error = %v", err)
+	if got := snapshot.Profiles[0]; got.Note != "kept" || got.Plan != PlanUnknown {
+		t.Fatalf("profile = %#v, want note and unknown server plan", got)
 	}
 }
 
@@ -948,7 +898,7 @@ func TestManagerDeleteRemovesMetadata(t *testing.T) {
 	m, paths := newTestManager(t)
 	writeAuthFile(t, filepath.Join(paths.profileDir, "work"), authFixture("account-work", "api-work"))
 	writeProfileMetadataFile(t, paths.metadataFile, map[string]profileMetadata{
-		"work": {Note: "tracked", Plan: PlanPlus},
+		"work": {Note: "tracked"},
 	})
 	writeInstallationIDsFile(t, paths.installationIDsFile, map[string]string{"work": testInstallationID(1)})
 

@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// Version 3 stores every available quota window instead of only the shortest
-// one. It also stores the optional monthly individual limit.
-const profileStatusCacheVersion = 3
+// Version 4 adds the server-reported account plan type.
+const profileStatusCacheVersion = 4
 
 type ProfileAuthStatus string
 
@@ -32,7 +31,9 @@ type ProfileQuota struct {
 type ProfileStatus struct {
 	FetchedAt  time.Time         `json:"fetched_at"`
 	AuthStatus ProfileAuthStatus `json:"auth_status"`
-	Quotas     []ProfileQuota    `json:"quotas,omitempty"`
+	// PlanType is optional because the app-server may omit it.
+	PlanType Plan           `json:"plan_type,omitempty"`
+	Quotas   []ProfileQuota `json:"quotas,omitempty"`
 	// UsedPercent and ResetsAt are retained as the legacy nearest-window view
 	// for callers that have not migrated to Quotas yet.
 	UsedPercent *int       `json:"used_percent,omitempty"`
@@ -217,7 +218,7 @@ func validCachedStatus(status ProfileStatus) bool {
 		return false
 	}
 	if status.AuthStatus == ProfileAuthSignInRequired {
-		return status.UsedPercent == nil && status.ResetsAt == nil && len(status.Quotas) == 0
+		return status.PlanType == PlanUnknown && status.UsedPercent == nil && status.ResetsAt == nil && len(status.Quotas) == 0
 	}
 	if status.AuthStatus != ProfileAuthAuthenticated {
 		return false

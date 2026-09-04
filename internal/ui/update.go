@@ -126,6 +126,7 @@ func (m appModel) handleStatusFetchFinished(msg statusFetchFinishedMsg) (tea.Mod
 	if index < 0 || m.profiles[index].Kind != profilemgr.AuthKindChatGPT {
 		return m, m.dispatchStatusFetches()
 	}
+	selectedKey := m.selectedProfileKey()
 
 	switch {
 	case msg.err == nil:
@@ -137,6 +138,8 @@ func (m appModel) handleStatusFetchFinished(msg statusFetchFinishedMsg) (tea.Mod
 		} else {
 			copy := msg.status
 			m.profileStatuses[msg.profileKey] = profileStatusView{status: &copy, phase: statusCached}
+			m.profiles[index].Plan = msg.status.PlanType
+			m.sortProfiles(selectedKey)
 		}
 	case errors.Is(msg.err, profilestatus.ErrSignInRequired):
 		status := profilemgr.ProfileStatus{FetchedAt: m.now().UTC(), AuthStatus: profilemgr.ProfileAuthSignInRequired}
@@ -147,6 +150,8 @@ func (m appModel) handleStatusFetchFinished(msg statusFetchFinishedMsg) (tea.Mod
 			m.profileStatuses[msg.profileKey] = view
 		} else {
 			m.profileStatuses[msg.profileKey] = profileStatusView{status: &status, phase: statusCached}
+			m.profiles[index].Plan = profilemgr.PlanUnknown
+			m.sortProfiles(selectedKey)
 		}
 	case errors.Is(msg.err, context.Canceled):
 		// Re-authentication and shutdown cancel status work intentionally.
@@ -190,10 +195,6 @@ func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		return m.startAuthentication()
-
-	case "p":
-		m = m.cycleSelectedPlan()
-		return m, m.dispatchStatusFetches()
 
 	case "s":
 		return m.saveActiveAuth()
@@ -432,33 +433,6 @@ func (m appModel) enterEditNoteMode() (tea.Model, tea.Cmd) {
 	}
 	selected := m.selectedProfile()
 	return m.enterInput(actionEditNote, fmt.Sprintf("Edit note for %q:", selected.Label), selected.Note)
-}
-
-func (m appModel) cycleSelectedPlan() appModel {
-	if len(m.profiles) == 0 {
-		m.setError("No profiles to update.")
-		return m
-	}
-
-	selected := m.selectedProfile()
-	if selected.Kind == profilemgr.AuthKindAPIKey {
-		m.setInfo("API-key profiles use the API plan.")
-		return m
-	}
-	nextPlan := selected.Plan.Next()
-	if err := m.profileManager.SetPlan(selected.Key, nextPlan); err != nil {
-		return m.handleActionError(err)
-	}
-	if err := m.reload(); err != nil {
-		m.setError(err.Error())
-		return m
-	}
-	m.cursor = indexOfProfile(m.profiles, selected.Key)
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	m.setStatus(fmt.Sprintf("Set plan for %q to %s.", selected.Label, nextPlan.Label()))
-	return m
 }
 
 func (m *appModel) activateProfile(key string) appModel {

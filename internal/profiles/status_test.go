@@ -17,7 +17,7 @@ func TestProfileStatusCacheRoundTripTTLAndPermissions(t *testing.T) {
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	percent := 38
 	reset := now.Add(time.Hour)
-	status := ProfileStatus{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated, UsedPercent: &percent, ResetsAt: &reset}
+	status := ProfileStatus{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated, PlanType: Plan("future-tier"), UsedPercent: &percent, ResetsAt: &reset}
 	if err := m.SaveProfileStatus("work", status); err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +36,9 @@ func TestProfileStatusCacheRoundTripTTLAndPermissions(t *testing.T) {
 	}
 	if loaded["work"].UsedPercent == nil || *loaded["work"].UsedPercent != percent {
 		t.Fatalf("loaded status = %#v", loaded["work"])
+	}
+	if got := loaded["work"].PlanType; got != Plan("future-tier") {
+		t.Fatalf("loaded plan type = %q, want future-tier", got)
 	}
 }
 
@@ -169,6 +172,9 @@ func TestProfileStatusCacheTreatsCorruptionUnknownSchemaAndReadFailureAsMissing(
 		{name: "legacy quota cache", setup: func(t *testing.T, manager Manager) {
 			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":2,"profiles":{"work":{"fetched_at":"2026-08-16T12:00:00Z","auth_status":"authenticated","used_percent":20,"resets_at":"2026-08-16T13:00:00Z"}}}`))
 		}},
+		{name: "pre-plan quota cache", setup: func(t *testing.T, manager Manager) {
+			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":3,"profiles":{"work":{"fetched_at":"2026-08-16T12:00:00Z","auth_status":"authenticated","used_percent":20,"resets_at":"2026-08-16T13:00:00Z"}}}`))
+		}},
 		{name: "unknown future schema", setup: func(t *testing.T, manager Manager) {
 			writeStatusTestFile(t, manager.StatusCacheFile, []byte(`{"version":999,"profiles":{"work":{}}}`))
 		}},
@@ -220,6 +226,7 @@ func TestProfileStatusCacheMergesInvalidatesAndRejectsInvalidEntries(t *testing.
 	invalidPercent := 101
 	for _, invalid := range []ProfileStatus{
 		{},
+		{FetchedAt: now, AuthStatus: ProfileAuthSignInRequired, PlanType: PlanPlus},
 		{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated},
 		{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated, UsedPercent: &invalidPercent},
 		{FetchedAt: now, AuthStatus: ProfileAuthAuthenticated, Quotas: []ProfileQuota{{WindowDurationMins: 300, RemainingPercent: 101, ResetsAt: now}}},
