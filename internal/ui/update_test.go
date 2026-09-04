@@ -1472,6 +1472,7 @@ func TestRenderListStylesSelectedAndActiveEmailsWithoutCursor(t *testing.T) {
 func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 	home := t.TempDir()
 	writeUIProfile(t, home, "z-pro", "acct-pro")
+	writeUIProfile(t, home, "a-prolite", "acct-prolite")
 	writeUIProfile(t, home, "z-plus", "acct-plus-z")
 	writeUIProfile(t, home, "a-plus", "acct-plus-a")
 	writeUIProfile(t, home, "a-free", "acct-free")
@@ -1479,10 +1480,11 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 
 	m := newAppModel(home)
 	for key, plan := range map[string]profilemgr.Plan{
-		"z-pro":  profilemgr.PlanPro,
-		"z-plus": profilemgr.PlanPlus,
-		"a-plus": profilemgr.PlanPlus,
-		"a-free": profilemgr.PlanFree,
+		"z-pro":     profilemgr.PlanPro,
+		"a-prolite": profilemgr.PlanProLite,
+		"z-plus":    profilemgr.PlanPlus,
+		"a-plus":    profilemgr.PlanPlus,
+		"a-free":    profilemgr.PlanFree,
 	} {
 		saveUIPlanStatus(t, m, key, plan)
 	}
@@ -1490,7 +1492,7 @@ func TestReloadSortsProfilesByPlanThenName(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 
-	want := []string{"z-pro", "a-plus", "z-plus", "a-free", "api-free"}
+	want := []string{"a-prolite", "z-pro", "a-plus", "z-plus", "a-free", "api-free"}
 	for i, name := range want {
 		if got := m.profiles[i].Key; got != name {
 			t.Fatalf("profiles[%d].Key = %q, want %q; profiles=%#v", i, got, name, m.profiles)
@@ -1617,6 +1619,7 @@ func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 		profilemgr.PlanFree:         renderPlan(profilemgr.PlanFree),
 		profilemgr.PlanPlus:         renderPlan(profilemgr.PlanPlus),
 		profilemgr.PlanPro:          renderPlan(profilemgr.PlanPro),
+		profilemgr.PlanProLite:      renderPlan(profilemgr.PlanProLite),
 		profilemgr.PlanAPI:          renderPlan(profilemgr.PlanAPI),
 		profilemgr.PlanUnknown:      renderPlan(profilemgr.PlanUnknown),
 		profilemgr.Plan("business"): renderPlan(profilemgr.Plan("business")),
@@ -1625,6 +1628,7 @@ func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 		profilemgr.PlanFree:         "Free",
 		profilemgr.PlanPlus:         "Plus",
 		profilemgr.PlanPro:          "Pro",
+		profilemgr.PlanProLite:      "Pro",
 		profilemgr.PlanAPI:          "API",
 		profilemgr.PlanUnknown:      "—",
 		profilemgr.Plan("business"): "business",
@@ -1632,6 +1636,9 @@ func TestRenderPlanLabelsUseDistinctStyles(t *testing.T) {
 		if got := strings.TrimSpace(stripANSI(rendered[plan])); got != want {
 			t.Fatalf("renderPlan(%q) = %q, want %q", plan, got, want)
 		}
+	}
+	if rendered[profilemgr.PlanProLite] != rendered[profilemgr.PlanPro] {
+		t.Fatalf("prolite style differs from pro: %q != %q", rendered[profilemgr.PlanProLite], rendered[profilemgr.PlanPro])
 	}
 	if rendered[profilemgr.PlanFree] == rendered[profilemgr.PlanPlus] || rendered[profilemgr.PlanPlus] == rendered[profilemgr.PlanPro] || rendered[profilemgr.PlanPro] == rendered[profilemgr.PlanAPI] {
 		t.Fatalf("plan styles are not distinct: %#v", rendered)

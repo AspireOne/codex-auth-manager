@@ -69,12 +69,13 @@ const (
 	PlanFree    Plan = "free"
 	PlanPlus    Plan = "plus"
 	PlanPro     Plan = "pro"
+	PlanProLite Plan = "prolite"
 	PlanAPI     Plan = "api"
 )
 
 func (p Plan) Label() string {
 	switch strings.ToLower(strings.TrimSpace(string(p))) {
-	case string(PlanPro):
+	case string(PlanPro), string(PlanProLite):
 		return "Pro"
 	case string(PlanPlus):
 		return "Plus"
@@ -91,7 +92,7 @@ func (p Plan) Label() string {
 
 func (p Plan) Rank() int {
 	switch strings.ToLower(strings.TrimSpace(string(p))) {
-	case string(PlanPro):
+	case string(PlanPro), string(PlanProLite):
 		return 0
 	case string(PlanPlus):
 		return 1

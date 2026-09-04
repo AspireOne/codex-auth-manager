@@ -555,7 +555,7 @@ func renderPlanCell(plan profilemgr.Plan, planColumnWidth int) string {
 	label := renderedPlanLabel(plan)
 	style := unknownPlanStyle
 	switch strings.ToLower(strings.TrimSpace(string(plan))) {
-	case string(profilemgr.PlanPro):
+	case string(profilemgr.PlanPro), string(profilemgr.PlanProLite):
 		style = proPlanStyle
 	case string(profilemgr.PlanPlus):
 		style = plusPlanStyle
