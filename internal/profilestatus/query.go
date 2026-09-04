@@ -111,11 +111,15 @@ func queryStatus(ctx context.Context, session *codexapp.Session) (profilemgr.Pro
 	if err := session.Request(ctx, "account/rateLimits/read", map[string]any{}, &response); err != nil {
 		return profilemgr.ProfileStatus{}, classifyError(err)
 	}
-	status, err := statusFromRateLimits(response, time.Now().UTC())
+	fetchedAt := time.Now().UTC()
+	status, err := statusFromRateLimits(response, fetchedAt)
 	if err != nil {
 		return profilemgr.ProfileStatus{}, err
 	}
 	status.PlanType = planTypeFromServer(account.Account.PlanType)
+	if status.PlanType != profilemgr.PlanUnknown {
+		status.PlanFetchedAt = &fetchedAt
+	}
 	return status, nil
 }
 

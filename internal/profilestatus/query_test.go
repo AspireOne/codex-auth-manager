@@ -242,6 +242,12 @@ func TestQueryerFetchEndToEnd(t *testing.T) {
 				if status.UsedPercent == nil || *status.UsedPercent != test.wantPercent || status.ResetsAt == nil || len(status.Quotas) != test.wantQuotas || (test.wantMonthly && !status.Quotas[len(status.Quotas)-1].Monthly) || status.PlanType != test.wantPlan {
 					t.Fatalf("status = %#v, want %d%% with reset and %d quota(s)", status, test.wantPercent, test.wantQuotas)
 				}
+				if test.wantPlan == profilemgr.PlanUnknown && status.PlanFetchedAt != nil {
+					t.Fatalf("missing plan fetched at = %v, want nil", status.PlanFetchedAt)
+				}
+				if test.wantPlan != profilemgr.PlanUnknown && (status.PlanFetchedAt == nil || status.PlanFetchedAt.IsZero()) {
+					t.Fatalf("plan fetched at = %v, want successful fetch timestamp", status.PlanFetchedAt)
+				}
 			}
 		})
 	}

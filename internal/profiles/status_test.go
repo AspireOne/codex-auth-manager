@@ -40,6 +40,101 @@ func TestProfileStatusCacheRoundTripTTLAndPermissions(t *testing.T) {
 	if got := loaded["work"].PlanType; got != Plan("future-tier") {
 		t.Fatalf("loaded plan type = %q, want future-tier", got)
 	}
+	if loaded["work"].PlanFetchedAt == nil || !loaded["work"].PlanFetchedAt.Equal(now) {
+		t.Fatalf("loaded plan fetched at = %v, want %v", loaded["work"].PlanFetchedAt, now)
+	}
+}
+
+func TestProfileStatusCacheExpiresPlanIndependentlyFromQuota(t *testing.T) {
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		age      time.Duration
+		wantPlan Plan
+	}{
+		{name: "just fresh", age: profilePlanCacheTTL - time.Nanosecond, wantPlan: PlanPlus},
+		{name: "exactly expired", age: profilePlanCacheTTL, wantPlan: PlanUnknown},
+		{name: "older", age: profilePlanCacheTTL + time.Hour, wantPlan: PlanUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := NewManager(filepath.Join(t.TempDir(), ".codex"))
+			if err := manager.ensurePrivateStorage(); err != nil {
+				t.Fatal(err)
+			}
+			percent := 20
+			reset := now.Add(time.Hour)
+			planFetchedAt := now.Add(-test.age)
+			if err := manager.SaveProfileStatus("work", ProfileStatus{
+				FetchedAt: now.Add(-30 * time.Minute), AuthStatus: ProfileAuthAuthenticated,
+				PlanType: PlanPlus, PlanFetchedAt: &planFetchedAt,
+				UsedPercent: &percent, ResetsAt: &reset,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			loaded, err := manager.LoadProfileStatuses(map[string]AuthKind{"work": AuthKindChatGPT}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := loaded["work"]
+			if status.PlanType != test.wantPlan {
+				t.Fatalf("plan type = %q, want %q", status.PlanType, test.wantPlan)
+			}
+			if status.UsedPercent == nil || *status.UsedPercent != percent {
+				t.Fatalf("quota was not retained after plan expiry: %#v", status)
+			}
+		})
+	}
+}
+
+func TestProfileStatusCachePreservesFreshPlanWhenRefreshOmitsIt(t *testing.T) {
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		age      time.Duration
+		wantPlan Plan
+	}{
+		{name: "fresh plan", age: time.Hour, wantPlan: PlanPlus},
+		{name: "expired plan", age: profilePlanCacheTTL, wantPlan: PlanUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := NewManager(filepath.Join(t.TempDir(), ".codex"))
+			if err := manager.ensurePrivateStorage(); err != nil {
+				t.Fatal(err)
+			}
+			oldPercent, newPercent := 20, 35
+			oldReset, newReset := now.Add(time.Hour), now.Add(2*time.Hour)
+			planFetchedAt := now.Add(-test.age)
+			if err := manager.SaveProfileStatus("work", ProfileStatus{
+				FetchedAt: now.Add(-time.Hour), AuthStatus: ProfileAuthAuthenticated,
+				PlanType: PlanPlus, PlanFetchedAt: &planFetchedAt,
+				UsedPercent: &oldPercent, ResetsAt: &oldReset,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.SaveProfileStatus("work", ProfileStatus{
+				FetchedAt: now, AuthStatus: ProfileAuthAuthenticated,
+				UsedPercent: &newPercent, ResetsAt: &newReset,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			loaded, err := manager.LoadProfileStatuses(map[string]AuthKind{"work": AuthKindChatGPT}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := loaded["work"]
+			if status.PlanType != test.wantPlan {
+				t.Fatalf("plan type = %q, want %q", status.PlanType, test.wantPlan)
+			}
+			if status.UsedPercent == nil || *status.UsedPercent != newPercent {
+				t.Fatalf("quota = %#v, want refreshed quota", status)
+			}
+			if test.wantPlan == PlanUnknown && status.PlanFetchedAt != nil {
+				t.Fatalf("expired plan timestamp = %v, want nil", status.PlanFetchedAt)
+			}
+		})
+	}
 }
 
 func TestProfileStatusCacheRoundTripsAllQuotaWindows(t *testing.T) {

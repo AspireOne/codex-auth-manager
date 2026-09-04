@@ -1532,29 +1532,77 @@ func TestStatusFetchUpdatesPlanAndPreservesSelection(t *testing.T) {
 	}
 }
 
-func TestMissingServerPlanClearsPreviousPlan(t *testing.T) {
+func TestMissingServerPlanRetainsFreshCachedPlan(t *testing.T) {
 	home := t.TempDir()
 	writeUIProfile(t, home, "chat@example.com", "acct")
 	m := newAppModel(home)
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	m.profiles[0].Plan = profilemgr.PlanPro
+	planFetchedAt := now.Add(-time.Hour)
+	key := m.profiles[0].Key
+	m.profiles[0].Plan = profilemgr.PlanPlus
+	m.profileStatuses[key] = profileStatusView{status: &profilemgr.ProfileStatus{
+		FetchedAt: now.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+		PlanType: profilemgr.PlanPlus, PlanFetchedAt: &planFetchedAt,
+	}, phase: statusCached}
 	m.statusQueue = nil
 	percent := 10
-	reset := m.now().Add(time.Hour)
+	reset := now.Add(time.Hour)
 	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
-		profileKey: m.profiles[0].Key,
+		profileKey: key,
 		epoch:      m.statusEpoch,
 		status: profilemgr.ProfileStatus{
-			FetchedAt: m.now(), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+			FetchedAt: now, AuthStatus: profilemgr.ProfileAuthAuthenticated,
 			PlanType:    profilemgr.PlanUnknown,
 			UsedPercent: &percent, ResetsAt: &reset,
 		},
 	})
 	got := updated.(appModel)
+	if got.profiles[0].Plan != profilemgr.PlanPlus {
+		t.Fatalf("plan after missing server value = %q, want retained Plus", got.profiles[0].Plan)
+	}
+	if got.profileStatuses[key].status == nil || got.profileStatuses[key].status.PlanType != profilemgr.PlanPlus {
+		t.Fatalf("cached plan after missing server value = %#v, want retained Plus", got.profileStatuses[key].status)
+	}
+}
+
+func TestExpiredPlanClearsAfterMissingServerPlan(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	m := newAppModel(home)
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	current := now
+	m.now = func() time.Time { return current }
+	if err := m.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	planFetchedAt := now.Add(-13 * 24 * time.Hour)
+	key := m.profiles[0].Key
+	m.profiles[0].Plan = profilemgr.PlanPlus
+	m.profileStatuses[key] = profileStatusView{status: &profilemgr.ProfileStatus{
+		FetchedAt: now, AuthStatus: profilemgr.ProfileAuthAuthenticated,
+		PlanType: profilemgr.PlanPlus, PlanFetchedAt: &planFetchedAt,
+	}, phase: statusCached}
+	m.statusQueue = nil
+	current = planFetchedAt.Add(14 * 24 * time.Hour)
+	percent := 10
+	reset := current.Add(time.Hour)
+	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
+		profileKey: key, epoch: m.statusEpoch,
+		status: profilemgr.ProfileStatus{
+			FetchedAt: current, AuthStatus: profilemgr.ProfileAuthAuthenticated,
+			UsedPercent: &percent, ResetsAt: &reset,
+		},
+	})
+	got := updated.(appModel)
 	if got.profiles[0].Plan != profilemgr.PlanUnknown {
-		t.Fatalf("plan after missing server value = %q, want unknown", got.profiles[0].Plan)
+		t.Fatalf("expired plan = %q, want unknown", got.profiles[0].Plan)
+	}
+	if got.profileStatuses[key].status == nil || got.profileStatuses[key].status.PlanType != profilemgr.PlanUnknown {
+		t.Fatalf("cached expired plan = %#v, want unknown", got.profileStatuses[key].status)
 	}
 }
 
@@ -1562,17 +1610,61 @@ func TestFailedStatusFetchRetainsCachedPlan(t *testing.T) {
 	home := t.TempDir()
 	writeUIProfile(t, home, "chat@example.com", "acct")
 	m := newAppModel(home)
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
 	if err := m.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
+	planFetchedAt := now.Add(-time.Hour)
+	key := m.profiles[0].Key
 	m.profiles[0].Plan = profilemgr.PlanPlus
+	m.profileStatuses[key] = profileStatusView{status: &profilemgr.ProfileStatus{
+		FetchedAt: now.Add(-time.Hour), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+		PlanType: profilemgr.PlanPlus, PlanFetchedAt: &planFetchedAt,
+	}, phase: statusLoading, stale: true}
 	m.statusQueue = nil
 	updated, _ := m.handleStatusFetchFinished(statusFetchFinishedMsg{
-		profileKey: m.profiles[0].Key, epoch: m.statusEpoch, err: errors.New("backend unavailable"),
+		profileKey: key, epoch: m.statusEpoch, err: errors.New("backend unavailable"),
 	})
 	got := updated.(appModel)
 	if got.profiles[0].Plan != profilemgr.PlanPlus {
 		t.Fatalf("plan after failed refresh = %q, want retained Plus", got.profiles[0].Plan)
+	}
+}
+
+func TestReloadShowsFreshPlanWhileRefreshingStaleQuota(t *testing.T) {
+	home := t.TempDir()
+	writeUIProfile(t, home, "chat@example.com", "acct")
+	m := newAppModel(home)
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	manager := m.profileManager
+	snapshot, err := manager.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	percent := 20
+	reset := now.Add(time.Hour)
+	planFetchedAt := now.Add(-time.Hour)
+	if err := manager.SaveProfileStatus(snapshot.Profiles[0].Key, profilemgr.ProfileStatus{
+		FetchedAt: now.Add(-profileStatusTTL), AuthStatus: profilemgr.ProfileAuthAuthenticated,
+		PlanType: profilemgr.PlanPlus, PlanFetchedAt: &planFetchedAt,
+		UsedPercent: &percent, ResetsAt: &reset,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.profiles[0].Plan; got != profilemgr.PlanPlus {
+		t.Fatalf("startup plan = %q, want cached Plus", got)
+	}
+	if len(m.statusQueue) != 1 {
+		t.Fatalf("status queue = %v, want stale quota refresh", m.statusQueue)
+	}
+	if view := m.profileStatuses[snapshot.Profiles[0].Key]; !view.stale || view.status == nil {
+		t.Fatalf("cached quota view = %#v, want stale retained data", view)
 	}
 }
 

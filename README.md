@@ -204,7 +204,9 @@ The profile list shows each ChatGPT account's available quota windows
 (5-hour, weekly, and optional monthly), remaining percentage, reset time,
 plan type, and combined fetch state at a glance. Plan types come directly from
 Codex's app-server and are cached with the quota status; missing or unavailable
-values are shown as `—`, and future server plan values remain supported. The
+values are shown as `—`, and future server plan values remain supported. Plan
+values remain cached for two weeks, while quota data keeps its shorter refresh
+window; expired plans are shown as `—` until fetched again. The
 state shows a question mark while
 loading, a check mark for usable fetched or cached data, and a cross when
 fetching or authentication fails. The active profile header also shows

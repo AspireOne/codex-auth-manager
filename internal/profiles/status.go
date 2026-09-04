@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
-// Version 4 adds the server-reported account plan type.
+// Version 4 adds the server-reported account plan type. PlanFetchedAt is an
+// additive field; v4 entries without it fall back to FetchedAt.
 const profileStatusCacheVersion = 4
+
+const profilePlanCacheTTL = 14 * 24 * time.Hour
 
 type ProfileAuthStatus string
 
@@ -32,8 +35,9 @@ type ProfileStatus struct {
 	FetchedAt  time.Time         `json:"fetched_at"`
 	AuthStatus ProfileAuthStatus `json:"auth_status"`
 	// PlanType is optional because the app-server may omit it.
-	PlanType Plan           `json:"plan_type,omitempty"`
-	Quotas   []ProfileQuota `json:"quotas,omitempty"`
+	PlanType      Plan           `json:"plan_type,omitempty"`
+	PlanFetchedAt *time.Time     `json:"plan_fetched_at,omitempty"`
+	Quotas        []ProfileQuota `json:"quotas,omitempty"`
 	// UsedPercent and ResetsAt are retained as the legacy nearest-window view
 	// for callers that have not migrated to Quotas yet.
 	UsedPercent *int       `json:"used_percent,omitempty"`
@@ -63,6 +67,13 @@ func (m Manager) LoadProfileStatuses(valid map[string]AuthKind, now time.Time) (
 		if !exists || kind != AuthKindChatGPT || status.FetchedAt.After(now) || !validCachedStatus(status) {
 			delete(cache.Profiles, key)
 			changed = true
+			continue
+		}
+		if status.AuthStatus == ProfileAuthAuthenticated && !status.HasFreshPlan(now) && status.PlanType != PlanUnknown {
+			status.PlanType = PlanUnknown
+			status.PlanFetchedAt = nil
+			cache.Profiles[key] = status
+			changed = true
 		}
 	}
 	if changed {
@@ -78,6 +89,14 @@ func (m Manager) SaveProfileStatus(key string, status ProfileStatus) error {
 		return errors.New("invalid profile status")
 	}
 	status.FetchedAt = status.FetchedAt.UTC()
+	if status.PlanFetchedAt != nil {
+		planFetchedAt := status.PlanFetchedAt.UTC()
+		status.PlanFetchedAt = &planFetchedAt
+	}
+	if strings.TrimSpace(string(status.PlanType)) != "" && status.PlanFetchedAt == nil {
+		planFetchedAt := status.FetchedAt
+		status.PlanFetchedAt = &planFetchedAt
+	}
 	if status.ResetsAt != nil {
 		reset := status.ResetsAt.UTC()
 		status.ResetsAt = &reset
@@ -88,6 +107,17 @@ func (m Manager) SaveProfileStatus(key string, status ProfileStatus) error {
 	cache, err := m.readProfileStatusCache()
 	if err != nil {
 		return err
+	}
+	if status.AuthStatus == ProfileAuthAuthenticated && status.PlanType != PlanUnknown && !status.HasFreshPlan(status.FetchedAt) {
+		status.PlanType = PlanUnknown
+		status.PlanFetchedAt = nil
+	}
+	if status.AuthStatus == ProfileAuthAuthenticated && status.PlanType == PlanUnknown {
+		if previous, ok := cache.Profiles[key]; ok && previous.HasFreshPlan(status.FetchedAt) {
+			status.PlanType = previous.PlanType
+			planFetchedAt := previous.effectivePlanFetchedAt()
+			status.PlanFetchedAt = &planFetchedAt
+		}
 	}
 	cache.Profiles[key] = status
 	return m.writeProfileStatusCache(cache)
@@ -218,9 +248,12 @@ func validCachedStatus(status ProfileStatus) bool {
 		return false
 	}
 	if status.AuthStatus == ProfileAuthSignInRequired {
-		return status.PlanType == PlanUnknown && status.UsedPercent == nil && status.ResetsAt == nil && len(status.Quotas) == 0
+		return status.PlanType == PlanUnknown && status.PlanFetchedAt == nil && status.UsedPercent == nil && status.ResetsAt == nil && len(status.Quotas) == 0
 	}
 	if status.AuthStatus != ProfileAuthAuthenticated {
+		return false
+	}
+	if status.PlanType == PlanUnknown && status.PlanFetchedAt != nil {
 		return false
 	}
 	if len(status.Quotas) > 0 {
@@ -232,6 +265,24 @@ func validCachedStatus(status ProfileStatus) bool {
 		return true
 	}
 	return status.UsedPercent != nil && *status.UsedPercent >= 0 && *status.UsedPercent <= 100 && status.ResetsAt != nil
+}
+
+// HasFreshPlan reports whether the cached plan is still within its two-week
+// retention window. Older cache entries use the full status timestamp.
+func (status ProfileStatus) HasFreshPlan(now time.Time) bool {
+	if status.AuthStatus != ProfileAuthAuthenticated || strings.TrimSpace(string(status.PlanType)) == "" {
+		return false
+	}
+	fetchedAt := status.effectivePlanFetchedAt()
+	now = now.UTC()
+	return !fetchedAt.IsZero() && !fetchedAt.After(now) && now.Sub(fetchedAt) < profilePlanCacheTTL
+}
+
+func (status ProfileStatus) effectivePlanFetchedAt() time.Time {
+	if status.PlanFetchedAt != nil {
+		return status.PlanFetchedAt.UTC()
+	}
+	return status.FetchedAt.UTC()
 }
 
 func validProfileQuota(quota ProfileQuota) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -127,19 +128,22 @@ func (m appModel) handleStatusFetchFinished(msg statusFetchFinishedMsg) (tea.Mod
 		return m, m.dispatchStatusFetches()
 	}
 	selectedKey := m.selectedProfileKey()
+	previous := m.profileStatuses[msg.profileKey].status
 
 	switch {
 	case msg.err == nil:
-		if err := m.profileManager.SaveProfileStatus(msg.profileKey, msg.status); err != nil {
+		status := msg.status
+		preserveFreshPlan(&status, previous, m.now())
+		if err := m.profileManager.SaveProfileStatus(msg.profileKey, status); err != nil {
 			view := m.profileStatuses[msg.profileKey]
 			view.phase = statusFailed
 			view.stale = view.status != nil
 			m.profileStatuses[msg.profileKey] = view
+			m.setProfilePlan(index, previous, selectedKey)
 		} else {
-			copy := msg.status
+			copy := status
 			m.profileStatuses[msg.profileKey] = profileStatusView{status: &copy, phase: statusCached}
-			m.profiles[index].Plan = msg.status.PlanType
-			m.sortProfiles(selectedKey)
+			m.setProfilePlan(index, &status, selectedKey)
 		}
 	case errors.Is(msg.err, profilestatus.ErrSignInRequired):
 		status := profilemgr.ProfileStatus{FetchedAt: m.now().UTC(), AuthStatus: profilemgr.ProfileAuthSignInRequired}
@@ -148,20 +152,49 @@ func (m appModel) handleStatusFetchFinished(msg statusFetchFinishedMsg) (tea.Mod
 			view.phase = statusFailed
 			view.stale = view.status != nil
 			m.profileStatuses[msg.profileKey] = view
+			m.setProfilePlan(index, previous, selectedKey)
 		} else {
 			m.profileStatuses[msg.profileKey] = profileStatusView{status: &status, phase: statusCached}
-			m.profiles[index].Plan = profilemgr.PlanUnknown
-			m.sortProfiles(selectedKey)
+			m.setProfilePlan(index, &status, selectedKey)
 		}
 	case errors.Is(msg.err, context.Canceled):
 		// Re-authentication and shutdown cancel status work intentionally.
+		m.setProfilePlan(index, previous, selectedKey)
 	default:
 		view := m.profileStatuses[msg.profileKey]
 		view.phase = statusFailed
 		view.stale = view.status != nil
 		m.profileStatuses[msg.profileKey] = view
+		m.setProfilePlan(index, previous, selectedKey)
 	}
 	return m, m.dispatchStatusFetches()
+}
+
+func (m *appModel) setProfilePlan(index int, status *profilemgr.ProfileStatus, selectedKey string) {
+	if status == nil {
+		return
+	}
+	plan := profilemgr.PlanUnknown
+	if status.HasFreshPlan(m.now()) {
+		plan = status.PlanType
+	}
+	if m.profiles[index].Plan == plan {
+		return
+	}
+	m.profiles[index].Plan = plan
+	m.sortProfiles(selectedKey)
+}
+
+func preserveFreshPlan(status *profilemgr.ProfileStatus, previous *profilemgr.ProfileStatus, now time.Time) {
+	if status.AuthStatus != profilemgr.ProfileAuthAuthenticated || status.HasFreshPlan(now) || previous == nil || !previous.HasFreshPlan(now) {
+		return
+	}
+	status.PlanType = previous.PlanType
+	planFetchedAt := previous.FetchedAt.UTC()
+	if previous.PlanFetchedAt != nil {
+		planFetchedAt = previous.PlanFetchedAt.UTC()
+	}
+	status.PlanFetchedAt = &planFetchedAt
 }
 
 func (m appModel) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

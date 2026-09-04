@@ -231,7 +231,7 @@ func (m *appModel) reload() error {
 		status, exists := cached[profile.Key]
 		fresh := exists && m.now().Sub(status.FetchedAt) < profileStatusTTL
 		if exists {
-			if status.AuthStatus == profilemgr.ProfileAuthAuthenticated {
+			if status.HasFreshPlan(m.now()) {
 				profileIndex := indexOfProfile(m.profiles, profile.Key)
 				if profileIndex >= 0 {
 					m.profiles[profileIndex].Plan = status.PlanType
