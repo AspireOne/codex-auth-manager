@@ -13,7 +13,7 @@ This document provides essential context for agents working on the `codex-manage
 - Automatically tracks the current profile and syncs changes back to the saved version.
 
 ### Technology Stack
-- **Language:** Go 1.26.1+
+- **Language:** Go (minimum version in `go.mod`)
 - **TUI Framework:** [Bubble Tea](https://github.com/charmbracelet/bubbletea) (v2)
 - **Styling:** [Lip Gloss](https://github.com/charmbracelet/lipgloss) (v2)
 - **Build System:** Makefile

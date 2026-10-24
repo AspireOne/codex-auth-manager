@@ -239,11 +239,11 @@ func (s *Session) Close() {
 	s.close.Do(func() {
 		_ = s.stdin.Close()
 		select {
-		case <-s.exited:
+		case <-s.exited: //nolint:errcheck // Exit errors are expected during shutdown.
 		default:
 			_ = s.cmd.Process.Kill()
 			select {
-			case <-s.exited:
+			case <-s.exited: //nolint:errcheck // Exit errors are expected after killing the process.
 			case <-time.After(time.Second):
 			}
 		}
