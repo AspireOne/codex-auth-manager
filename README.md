@@ -114,22 +114,7 @@ Stable releases notify the [shared tap updater](https://github.com/AspireOne/hom
 
 ## Scoop
 
-This repo can also update a separate Scoop bucket repository whenever a GitHub release is published.
-
-One-time setup:
-
-1. Create a bucket repo on GitHub, for example `AspireOne/scoop-bucket`.
-2. In this repo, add a repository variable named `SCOOP_BUCKET_REPO` with that value.
-3. Add a repository secret named `SCOOP_BUCKET_TOKEN` containing a GitHub token that can push to the bucket repo.
-
-After that, each published release updates `bucket/codex-manage.json` in the bucket automatically.
-
-Users can then install with:
-
-```powershell
-scoop bucket add AspireOne https://github.com/AspireOne/scoop-bucket
-scoop install codex-manage
-```
+Stable releases notify the [shared bucket updater](https://github.com/AspireOne/scoop-bucket#updating-manifests), which validates and publishes the manifest. The bucket owns manifest changes and publishing; this repository only sends the app name and release tag. See the bucket's documentation for setup and manual updates.
 
 ## Run
 
