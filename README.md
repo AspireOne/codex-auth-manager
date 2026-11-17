@@ -26,6 +26,7 @@ This is useful if you regularly work with multiple Codex accounts and want a fas
 On macOS or Linux, install with Homebrew:
 
 ```sh
+brew trust AspireOne/tap
 brew install AspireOne/tap/codex-manage
 ```
 
@@ -109,21 +110,7 @@ This script ensures your working tree is clean, runs tests, creates an annotated
 
 ## Homebrew
 
-This repo can also update a separate Homebrew tap repository whenever a GitHub release is published.
-
-One-time setup:
-
-1. Create a tap repo on GitHub, for example `AspireOne/homebrew-tap`.
-2. In this repo, add a repository variable named `HOMEBREW_TAP_REPO` with that value.
-3. Add a repository secret named `HOMEBREW_TAP_TOKEN` containing a GitHub token that can push to the tap repo.
-
-After that, each published release updates `Formula/codex-manage.rb` in the tap automatically.
-
-Users can then install with:
-
-```sh
-brew install AspireOne/tap/codex-manage
-```
+Stable releases notify the [shared tap updater](https://github.com/AspireOne/homebrew-tap#updating-formulas), which validates and publishes the formula. The tap owns formula changes and publishing; this repository only sends the formula name and release tag. See the tap's documentation for setup and manual updates.
 
 ## Scoop
 
